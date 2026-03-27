@@ -1,4 +1,8 @@
-//! WASM Blinky Application
+//! SPDX-License-Identifier: MIT
+//!
+//! Copyright (c) 2026 Kevin Thomas
+//!
+//! # WASM Blinky Application
 //!
 //! A minimal WebAssembly module that blinks the onboard LED on an RP2350 Pico 2
 //! by calling host-provided GPIO and delay functions.

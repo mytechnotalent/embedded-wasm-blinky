@@ -1,4 +1,8 @@
-//! Platform glue for wasmtime's `no_std` runtime on the RP2350.
+//! SPDX-License-Identifier: MIT
+//!
+//! Copyright (c) 2026 Kevin Thomas
+//!
+//! # Platform Glue for wasmtime no_std on RP2350
 //!
 //! Implements the minimum thread-local storage (TLS) symbols required by
 //! wasmtime when running without an operating system. On this single-threaded

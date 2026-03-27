@@ -1,4 +1,8 @@
-//! Build script for the wasm-tests crate.
+//! SPDX-License-Identifier: MIT
+//!
+//! Copyright (c) 2026 Kevin Thomas
+//!
+//! # Build Script for wasm-tests Crate
 //!
 //! Compiles the WASM blinky application before tests run so the binary
 //! is available for integration tests via `include_bytes!`.

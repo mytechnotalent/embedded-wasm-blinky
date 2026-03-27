@@ -1,4 +1,8 @@
-//! Build script for the t-wasm firmware.
+//! SPDX-License-Identifier: MIT
+//!
+//! Copyright (c) 2026 Kevin Thomas
+//!
+//! # Build Script for t-wasm Firmware
 //!
 //! Sets up the RP2350 linker script, compiles the WASM blinky application,
 //! and AOT-compiles the WASM binary to Pulley bytecode for the RP2350.

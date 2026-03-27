@@ -1,4 +1,8 @@
-//! Integration tests for the WASM blinky module.
+//! SPDX-License-Identifier: MIT
+//!
+//! Copyright (c) 2026 Kevin Thomas
+//!
+//! # Integration Tests for WASM Blinky Module
 //!
 //! Validates that the compiled WASM binary loads correctly, exports the
 //! expected `run` function, imports the correct host functions, and calls
