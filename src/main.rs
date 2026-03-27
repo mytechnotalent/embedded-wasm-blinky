@@ -4,22 +4,24 @@
 //!
 //! # WASM Blinky Firmware for RP2350 (Pico 2)
 //!
-//! This firmware runs a WebAssembly interpreter on the RP2350 bare-metal.
-//! A compiled WASM module controls GPIO25 (onboard LED) to blink by calling
-//! host-provided GPIO and delay functions through the wasmi runtime.
+//! This firmware runs a WebAssembly runtime on the RP2350 bare-metal using
+//! wasmtime with the Pulley interpreter. A precompiled WASM module controls
+//! GPIO25 (onboard LED) to blink by calling host-provided GPIO and delay
+//! functions through the wasmtime runtime.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod platform;
+
 use alloc::boxed::Box;
 use core::panic::PanicInfo;
 use embedded_alloc::LlffHeap as Heap;
-use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::OutputPin;
 use rp235x_hal as hal;
-use wasmi::{Caller, Engine, Linker, Module, Store};
+use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
 
 /// Global heap allocator backed by a statically allocated memory region.
 ///
@@ -33,15 +35,15 @@ const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
 /// Heap size in bytes (256 KiB of the available 512 KiB RAM).
 const HEAP_SIZE: usize = 262_144;
 
-/// Compiled WASM blinky module embedded at build time.
-const WASM_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blinky.wasm"));
+/// Precompiled Pulley bytecode for the WASM blinky module, embedded at build time.
+const WASM_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blinky.cwasm"));
 
 /// RP2350 boot metadata placed in the `.start_block` section for the Boot ROM.
 #[unsafe(link_section = ".start_block")]
 #[used]
 pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 
-/// Host state shared with WASM guest functions via the wasmi store.
+/// Host state shared with WASM guest functions via the wasmtime store.
 ///
 /// Uses boxed closures to abstract over concrete HAL types, keeping the WASM
 /// runtime decoupled from hardware-specific pin and timer types.
@@ -52,10 +54,39 @@ struct HostState {
     delay_ms: Box<dyn FnMut(u32)>,
 }
 
-/// Custom panic handler that halts execution in an infinite loop.
+/// SIO base address for direct GPIO register access in panic handler.
+const SIO_BASE: u32 = 0xd000_0000;
+
+/// Blinks the LED via direct SIO register writes using RP2350 offsets.
+///
+/// Used in the panic handler where HAL abstractions are unavailable.
+/// Performs `count` visible blinks on GPIO25 (250ms on, 250ms off at
+/// 150 MHz) followed by a 500ms pause.
+fn panic_blink(count: u32) {
+    const GPIO_OE_SET: *mut u32 = (SIO_BASE + 0x038) as *mut u32;
+    const GPIO_OUT_SET: *mut u32 = (SIO_BASE + 0x018) as *mut u32;
+    const GPIO_OUT_CLR: *mut u32 = (SIO_BASE + 0x020) as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(GPIO_OE_SET, 1 << 25);
+    }
+    for _ in 0..count {
+        unsafe { core::ptr::write_volatile(GPIO_OUT_SET, 1 << 25) };
+        cortex_m::asm::delay(37_500_000);
+        unsafe { core::ptr::write_volatile(GPIO_OUT_CLR, 1 << 25) };
+        cortex_m::asm::delay(37_500_000);
+    }
+    cortex_m::asm::delay(75_000_000);
+}
+
+/// Panic handler that rapidly blinks the LED to signal a firmware crash.
+///
+/// Blinks GPIO25 in a continuous fast pattern so a panic is visually
+/// distinguishable from normal operation or a silent hang.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+    loop {
+        panic_blink(10);
+    }
 }
 
 /// Initializes the global heap allocator from a static memory region.
@@ -107,14 +138,14 @@ fn init_clocks(
 
 /// Wraps hardware peripherals into boxed closures for the WASM host state.
 ///
+/// Delay is implemented via CPU cycle counting (`cortex_m::asm::delay`) at
+/// approximately 150 MHz, providing reliable timing without depending on
+/// the HAL timer peripheral.
+///
 /// # Arguments
 ///
 /// * `led_pin` - GPIO pin configured as a push-pull output for the LED.
-/// * `timer` - Hardware timer implementing nanosecond-resolution delays.
-fn build_host_state(
-    mut led_pin: impl OutputPin + 'static,
-    mut timer: impl DelayNs + 'static,
-) -> HostState {
+fn build_host_state(mut led_pin: impl OutputPin + 'static) -> HostState {
     let set_led = Box::new(move |high: bool| {
         if high {
             let _ = led_pin.set_high();
@@ -122,7 +153,9 @@ fn build_host_state(
             let _ = led_pin.set_low();
         }
     });
-    let delay_ms = Box::new(move |ms: u32| timer.delay_ms(ms));
+    let delay_ms = Box::new(move |ms: u32| {
+        cortex_m::asm::delay(ms * 150_000);
+    });
     HostState { set_led, delay_ms }
 }
 
@@ -137,7 +170,7 @@ fn build_host_state(
 fn init_hardware() -> HostState {
     let mut pac = hal::pac::Peripherals::take().unwrap();
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
-    let clocks = init_clocks(
+    let _clocks = init_clocks(
         pac.XOSC,
         pac.CLOCKS,
         pac.PLL_SYS,
@@ -152,19 +185,50 @@ fn init_hardware() -> HostState {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
-    let timer = hal::Timer::new_timer0(pac.TIMER0, &mut pac.RESETS, &clocks);
-    build_host_state(pins.gpio25.into_push_pull_output(), timer)
+    build_host_state(pins.gpio25.into_push_pull_output())
 }
 
-/// Creates a WASM engine and compiles the embedded WASM module.
+/// Creates a wasmtime engine configured for Pulley on bare-metal.
+///
+/// Explicitly targets `pulley32` to match the AOT cross-compilation in
+/// `build.rs`. All settings must be identical between build-time and
+/// runtime engines or `Module::deserialize` will fail. OS-dependent
+/// features are disabled and memory limits are tuned for the RP2350's
+/// 512 KiB RAM.
 ///
 /// # Panics
 ///
-/// Panics if the embedded WASM binary is invalid.
-fn create_engine_and_module() -> (Engine, Module) {
-    let engine = Engine::default();
-    let module = Module::new(&engine, WASM_BINARY).expect("valid WASM module");
-    (engine, module)
+/// Panics if the engine configuration fails.
+fn create_engine() -> Engine {
+    let mut config = Config::new();
+    config.target("pulley32").expect("set pulley32 target");
+    config.signals_based_traps(false);
+    config.memory_init_cow(false);
+    config.memory_reservation(0);
+    config.memory_guard_size(0);
+    config.memory_reservation_for_growth(0);
+    config.guard_before_linear_memory(false);
+    config.max_wasm_stack(16384);
+    Engine::new(&config).expect("create Pulley engine")
+}
+
+/// Deserializes the precompiled Pulley module from embedded bytes.
+///
+/// # Safety
+///
+/// Uses `unsafe` to call `Module::deserialize` which requires that the
+/// embedded bytes are a valid serialized wasmtime module. This invariant
+/// is upheld because the bytes are produced by our build script.
+///
+/// # Arguments
+///
+/// * `engine` - Engine with matching Pulley configuration.
+///
+/// # Panics
+///
+/// Panics if the embedded Pulley bytecode is invalid.
+fn create_module(engine: &Engine) -> Module {
+    unsafe { Module::deserialize(engine, WASM_BINARY) }.expect("valid Pulley module")
 }
 
 /// Registers the `gpio_set_high` host function that turns the LED on.
@@ -253,17 +317,17 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
 ///
 /// * `store` - WASM store holding the host state.
 /// * `linker` - WASM linker with host functions registered.
-/// * `module` - Compiled WASM module to instantiate.
+/// * `module` - Precompiled WASM module to instantiate.
 ///
 /// # Panics
 ///
 /// Panics if instantiation fails or the `run` export is not found.
 fn execute_wasm(store: &mut Store<HostState>, linker: &Linker<HostState>, module: &Module) {
     let instance = linker
-        .instantiate_and_start(&mut *store, module)
+        .instantiate(&mut *store, module)
         .expect("instantiate WASM module");
     let run = instance
-        .get_typed_func::<(), ()>(&*store, "run")
+        .get_typed_func::<(), ()>(&mut *store, "run")
         .expect("find run function");
     run.call(&mut *store, ()).expect("execute WASM run");
 }
@@ -274,7 +338,8 @@ fn execute_wasm(store: &mut Store<HostState>, linker: &Linker<HostState>, module
 ///
 /// * `host_state` - Initialized hardware state with LED and timer closures.
 fn run_wasm(host_state: HostState) -> ! {
-    let (engine, module) = create_engine_and_module();
+    let engine = create_engine();
+    let module = create_module(&engine);
     let mut store = Store::new(&engine, host_state);
     let linker = build_linker(&engine);
     execute_wasm(&mut store, &linker, &module);

@@ -13,5 +13,5 @@ rustflags = [
     "target-cpu=cortex-m33",
 ]
 
-# Use picotool for loading.
-runner = "${PICOTOOL_PATH} load -u -v -x -t elf"
+# Use picotool for flashing via `cargo run --release`.
+runner = "picotool load -u -v -x -t elf"

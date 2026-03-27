@@ -1,12 +1,13 @@
 //! Build script for the t-wasm firmware.
 //!
-//! Sets up the RP2350 linker script and compiles the WASM blinky application
-//! for embedding into the firmware binary.
+//! Sets up the RP2350 linker script, compiles the WASM blinky application,
+//! and AOT-compiles the WASM binary to Pulley bytecode for the RP2350.
 
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use wasmtime::{Config, Engine};
 
 /// Creates the output directory path and registers it for linker search.
 ///
@@ -34,16 +35,12 @@ fn write_linker_script(out: &PathBuf) {
     f.write_all(memory_x).unwrap();
 }
 
-/// Compiles the WASM blinky application and copies the binary to the output directory.
-///
-/// # Arguments
-///
-/// * `out` - Output directory path where `blinky.wasm` will be placed.
+/// Compiles the WASM blinky application for the `wasm32-unknown-unknown` target.
 ///
 /// # Panics
 ///
-/// Panics if the WASM compilation fails or the binary cannot be copied.
-fn compile_wasm_app(out: &PathBuf) {
+/// Panics if the WASM compilation fails.
+fn compile_wasm_app() {
     let status = Command::new("cargo")
         .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
         .current_dir("wasm-app")
@@ -51,11 +48,48 @@ fn compile_wasm_app(out: &PathBuf) {
         .status()
         .expect("failed to build WASM app");
     assert!(status.success(), "WASM app compilation failed");
-    std::fs::copy(
-        "wasm-app/target/wasm32-unknown-unknown/release/wasm_app.wasm",
-        out.join("blinky.wasm"),
-    )
-    .expect("copy WASM binary");
+}
+
+/// Creates a wasmtime engine configured to cross-compile for Pulley 32-bit.
+///
+/// Mirrors the runtime engine configuration on the RP2350 so that the
+/// precompiled bytecode matches the device's expectations: no signal-based
+/// traps (bare-metal has no OS signal handlers) and no virtual-memory
+/// guard pages (embedded target with limited RAM).
+///
+/// # Panics
+///
+/// Panics if the engine configuration fails.
+fn create_pulley_engine() -> Engine {
+    let mut config = Config::new();
+    config.target("pulley32").expect("set pulley32 target");
+    config.signals_based_traps(false);
+    config.memory_init_cow(false);
+    config.memory_reservation(0);
+    config.memory_guard_size(0);
+    config.memory_reservation_for_growth(0);
+    config.guard_before_linear_memory(false);
+    config.max_wasm_stack(16384);
+    Engine::new(&config).expect("create Pulley engine")
+}
+
+/// AOT-compiles the WASM binary to Pulley bytecode and writes to the output directory.
+///
+/// # Arguments
+///
+/// * `out` - Output directory path where `blinky.cwasm` will be placed.
+///
+/// # Panics
+///
+/// Panics if compilation or serialization fails.
+fn compile_wasm_to_pulley(out: &PathBuf) {
+    let wasm_path = "wasm-app/target/wasm32-unknown-unknown/release/wasm_app.wasm";
+    let wasm_bytes = std::fs::read(wasm_path).expect("read WASM binary");
+    let engine = create_pulley_engine();
+    let serialized = engine
+        .precompile_module(&wasm_bytes)
+        .expect("precompile WASM module");
+    std::fs::write(out.join("blinky.cwasm"), &serialized).expect("write Pulley bytecode");
 }
 
 /// Registers file change triggers for incremental rebuilds.
@@ -70,6 +104,7 @@ fn print_rerun_triggers() {
 fn main() {
     let out = setup_output_dir();
     write_linker_script(&out);
-    compile_wasm_app(&out);
+    compile_wasm_app();
+    compile_wasm_to_pulley(&out);
     print_rerun_triggers();
 }

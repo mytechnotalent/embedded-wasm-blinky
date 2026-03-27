@@ -1,11 +1,12 @@
 # Embedded WASM Blinky
 ## WebAssembly Blinky on RP2350 Pico 2
 
-A pure Embedded Rust project that runs a **WebAssembly interpreter** directly on the RP2350 (Raspberry Pi Pico 2) bare-metal. A compiled WASM module controls the onboard LED — no operating system and no standard library.
+A pure Embedded Rust project that runs a **WebAssembly runtime** (wasmtime + Pulley interpreter) directly on the RP2350 (Raspberry Pi Pico 2) bare-metal. A WASM module is AOT-compiled to Pulley bytecode on the host and executed on the device to control the onboard LED — no operating system and no standard library.
 
 ## Table of Contents
 
-- [Embedded WASM Blinky — WebAssembly Blinky on RP2350 Pico 2](#embedded-wasm-blinky--webassembly-blinky-on-rp2350-pico-2)
+- [Embedded WASM Blinky](#embedded-wasm-blinky)
+  - [WebAssembly Blinky on RP2350 Pico 2](#webassembly-blinky-on-rp2350-pico-2)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Architecture](#architecture)
@@ -16,8 +17,7 @@ A pure Embedded Rust project that runs a **WebAssembly interpreter** directly on
     - [Optional (Debugging)](#optional-debugging)
   - [Building](#building)
   - [Flashing](#flashing)
-    - [Option 1: Script](#option-1-script)
-    - [Option 2: Manual](#option-2-manual)
+  - [Testing](#testing)
   - [How It Works](#how-it-works)
     - [1. The WASM Application](#1-the-wasm-application)
     - [2. The Firmware Runtime](#2-the-firmware-runtime)
@@ -32,14 +32,15 @@ A pure Embedded Rust project that runs a **WebAssembly interpreter** directly on
 
 ## Overview
 
-This project demonstrates that WebAssembly is not just for browsers — it can run on a microcontroller with 512 KB of RAM. The firmware embeds the [wasmi](https://github.com/wasmi-labs/wasmi) interpreter (a pure Rust, `no_std`-compatible WASM runtime) and executes a 191-byte WASM module that blinks GPIO25 at 500ms intervals.
+This project demonstrates that WebAssembly is not just for browsers — it can run on a microcontroller with 512 KB of RAM. The firmware uses [wasmtime](https://github.com/bytecodealliance/wasmtime) with the **Pulley interpreter** (a portable, `no_std`-compatible WebAssembly runtime) and executes a precompiled WASM module that blinks GPIO25 at 500ms intervals.
 
 **Key properties:**
 
 - **Pure Rust** — zero C code, zero C bindings, zero FFI
-- **Minimal unsafe** — only two unavoidable sites (heap init, boot metadata)
+- **Minimal unsafe** — only four unavoidable sites (heap init, boot metadata, module deserialize, panic handler GPIO)
 - **Tiny WASM binary** — 191 bytes for the blinky module
-- **Audited runtime** — wasmi has been security-audited twice (SRLabs, Runtime Verification Inc.)
+- **AOT compilation** — WASM is compiled to Pulley bytecode on the host, no compilation on device
+- **Industry-standard runtime** — wasmtime is the reference WebAssembly implementation
 
 ## Architecture
 
@@ -51,12 +52,12 @@ This project demonstrates that WebAssembly is not just for browsers — it can r
 │  │            Firmware (src/main.rs)         │  │
 │  │                                           │  │
 │  │  ┌─────────┐  ┌────────┐  ┌───────────┐   │  │
-│  │  │  Heap   │  │ wasmi  │  │ Host Fns  │   │  │
-│  │  │ 256 KiB │  │ Engine │  │ GPIO/Timer│   │  │
+│  │  │  Heap   │  │wasmtime│  │ Host Fns  │   │  │
+│  │  │ 256 KiB │  │ Pulley │  │GPIO/Timer │   │  │
 │  │  └─────────┘  └───┬────┘  └─────┬─────┘   │  │
-│  │                    │             │        │  │
-│  │              ┌─────┴─────────────┴─────┐  │  │
-│  │              │   WASM Module (191 B)   │  │  │
+│  │                   │             │         │  │
+│  │              ┌────┴─────────────┴──────┐  │  │
+│  │              │ Pulley Bytecode(.cwasm) │  │  │
 │  │              │                         │  │  │
 │  │              │  imports:               │  │  │
 │  │              │    env.gpio_set_high()  │  │  │
@@ -75,26 +76,26 @@ This project demonstrates that WebAssembly is not just for browsers — it can r
 ## Project Structure
 
 ```
-t-wasm/
+embedded-wasm-blinky/
 ├── .cargo/
-│   └── config.toml          # ARM Cortex-M33 target, linker flags, picotool runner
+│   └── config.toml           # ARM Cortex-M33 target, linker flags, picotool runner
 ├── .vscode/
-│   ├── extensions.json      # Recommended VS Code extensions
-│   └── settings.json        # Rust-analyzer target configuration
-├── wasm-app/                # WASM blinky module (compiled to .wasm)
+│   ├── extensions.json       # Recommended VS Code extensions
+│   └── settings.json         # Rust-analyzer target configuration
+├── wasm-app/                 # WASM blinky module (compiled to .wasm)
 │   ├── .cargo/
-│   │   └── config.toml      # WASM linker flags (minimal memory)
+│   │   └── config.toml       # WASM linker flags (minimal memory)
 │   ├── Cargo.toml
 │   └── src/
 │       └── lib.rs            # Blinky logic: imports host GPIO/delay, exports run()
 ├── src/
-│   └── main.rs               # Firmware: hardware init, wasmi runtime, host functions
-├── build.rs                   # Compiles WASM app, sets up linker scripts
-├── Cargo.toml                 # Firmware dependencies
-├── flash.sh                   # One-command build + flash script
-├── rp2350.x                   # RP2350 memory layout linker script
-├── SKILLS.md                   # Project conventions and lessons learned
-└── README.md                   # This file
+│   ├── main.rs               # Firmware: hardware init, wasmtime runtime, host functions
+│   └── platform.rs           # Platform TLS glue for wasmtime no_std
+├── build.rs                  # Compiles WASM app, AOT-compiles to Pulley bytecode
+├── Cargo.toml                # Firmware dependencies
+├── rp2350.x                  # RP2350 memory layout linker script
+├── SKILLS.md                 # Project conventions and lessons learned
+└── README.md                 # This file
 ```
 
 ## Prerequisites
@@ -107,7 +108,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Required compilation targets
 rustup target add thumbv8m.main-none-eabihf   # RP2350 ARM Cortex-M33
-rustup target add wasm32-unknown-unknown        # WebAssembly
+rustup target add wasm32-unknown-unknown      # WebAssembly
 ```
 
 ### Flashing Tool
@@ -135,28 +136,29 @@ cargo build --release
 This single command does everything:
 
 1. `build.rs` compiles `wasm-app/` to `wasm32-unknown-unknown` → produces `wasm_app.wasm` (191 bytes)
-2. The WASM binary is copied into the build output directory
-3. The firmware compiles for `thumbv8m.main-none-eabihf`, embedding the WASM binary via `include_bytes!`
+2. `build.rs` AOT-compiles the WASM binary to Pulley bytecode via Cranelift → produces `blinky.cwasm`
+3. The firmware compiles for `thumbv8m.main-none-eabihf`, embedding the Pulley bytecode via `include_bytes!`
 4. The result is an ELF at `target/thumbv8m.main-none-eabihf/release/t-wasm`
 
 ## Flashing
 
-### Option 1: Script
-
 ```bash
-./flash.sh
+cargo run --release
 ```
 
-### Option 2: Manual
-
-```bash
-cargo build --release
-picotool load -u -v -x -t elf target/thumbv8m.main-none-eabihf/release/t-wasm
-```
+This builds the firmware and flashes it to the Pico 2 via `picotool` (configured as the cargo runner in `.cargo/config.toml`).
 
 > **Note:** Hold the **BOOTSEL** button on the Pico 2 while plugging in the USB cable to enter bootloader mode. Release once connected.
 
 After flashing, the LED on GPIO25 will begin blinking at 500ms intervals.
+
+## Testing
+
+```bash
+cd wasm-tests && cargo test
+```
+
+Runs all 9 integration tests validating module loading, import/export contracts, blink sequencing, timing, and fuel-based execution limits.
 
 ## How It Works
 
@@ -200,7 +202,7 @@ The compiled WASM binary is only **191 bytes** because:
 
 The firmware performs these steps at boot:
 
-1. **Initialize heap** — 256 KiB of the RP2350's 512 KiB RAM is allocated as a heap for the wasmi runtime using `embedded-alloc`'s linked-list first-fit allocator.
+1. **Initialize heap** — 256 KiB of the RP2350's 512 KiB RAM is allocated as a heap for the wasmtime runtime using `embedded-alloc`'s linked-list first-fit allocator.
 
 2. **Initialize hardware** — Configures the external 12 MHz crystal oscillator, system clocks/PLLs, watchdog, SIO, GPIO25 (push-pull output), and Timer0.
 
@@ -208,23 +210,24 @@ The firmware performs these steps at boot:
 
 4. **Boot the WASM runtime:**
    ```
-   Engine::default()        → Create the wasmi interpreter engine
-   Module::new(wasm_bytes)  → Parse and compile the embedded WASM binary
-   Store::new(host_state)   → Create a store holding our GPIO/timer closures
-   Linker::new()            → Register host functions:
-                                env.gpio_set_high → (set_led)(true)
-                                env.gpio_set_low  → (set_led)(false)
-                                env.delay_ms      → timer.delay_ms(ms)
-   linker.instantiate()     → Link imports, create WASM instance
-   instance.get("run")      → Look up the exported run() function
-   run.call()               → Execute — blinks forever
+   Config::target("pulley32")   → Explicit Pulley target (must match build.rs)
+   Engine::new(&config)          → Create the wasmtime Pulley engine
+   Module::deserialize(cwasm)   → Deserialize precompiled Pulley bytecode
+   Store::new(host_state)       → Create a store holding our GPIO/delay closures
+   Linker::new()                → Register host functions:
+                                    env.gpio_set_high → (set_led)(true)
+                                    env.gpio_set_low  → (set_led)(false)
+                                    env.delay_ms      → cortex_m::asm::delay(ms * 150_000)
+   linker.instantiate()         → Link imports, create WASM instance
+   instance.get("run")          → Look up the exported run() function
+   run.call()                   → Execute — blinks forever
    ```
 
 ### 3. The Build Pipeline
 
 **File:** `build.rs`
 
-The build script orchestrates two compilations in sequence:
+The build script orchestrates three compilations in sequence:
 
 ```
 cargo build --release
@@ -236,12 +239,15 @@ cargo build --release
        │
        ├── 2. Spawn: cargo build --release --target wasm32-unknown-unknown
        │         └── wasm-app/ compiles → wasm_app.wasm (191 B)
-       │         └── Copy to OUT_DIR/blinky.wasm
        │
-       └── 3. Main firmware compiles:
-               └── include_bytes!("blinky.wasm") embeds the WASM binary
+       ├── 3. AOT-compile to Pulley bytecode via Cranelift:
+       │         └── Config::target("pulley32") → Engine → precompile_module
+       │         └── engine.precompile_module(&wasm_bytes) → OUT_DIR/blinky.cwasm
+       │
+       └── 4. Main firmware compiles:
+               └── include_bytes!("blinky.cwasm") embeds the Pulley bytecode
                └── Links against memory.x for RP2350 memory layout
-               └── Produces ELF binary (1.5 MB)
+               └── Produces ELF binary
 ```
 
 A critical detail: the parent build's `CARGO_ENCODED_RUSTFLAGS` (containing ARM-specific flags like `--nmagic` and `-Tlink.x`) must be stripped from the child WASM build via `.env_remove("CARGO_ENCODED_RUSTFLAGS")`, otherwise the WASM linker will fail on unrecognized arguments.
@@ -250,23 +256,23 @@ A critical detail: the parent build's `CARGO_ENCODED_RUSTFLAGS` (containing ARM-
 
 The WASM module communicates with hardware through three host functions registered under the `"env"` namespace:
 
-| Import Name         | Signature    | Description                            |
-| ------------------- | ------------ | -------------------------------------- |
-| `env.gpio_set_high` | `() → ()`    | Sets GPIO25 (onboard LED) to high (on) |
-| `env.gpio_set_low`  | `() → ()`    | Sets GPIO25 (onboard LED) to low (off) |
-| `env.delay_ms`      | `(i32) → ()` | Blocks execution for N milliseconds    |
+| Import Name         | Signature    | Description                                                  |
+| ------------------- | ------------ | ------------------------------------------------------------ |
+| `env.gpio_set_high` | `() → ()`    | Sets GPIO25 (onboard LED) to high (on)                       |
+| `env.gpio_set_low`  | `() → ()`    | Sets GPIO25 (onboard LED) to low (off)                       |
+| `env.delay_ms`      | `(i32) → ()` | Blocks execution for N milliseconds (via CPU cycle counting) |
 
-These are registered with the wasmi `Linker` via `func_wrap()`, which wraps Rust closures as WASM-callable functions.
+These are registered with the wasmtime `Linker` via `func_wrap()`, which wraps Rust closures as WASM-callable functions.
 
 ## Memory Layout
 
-| Region             | Address      | Size            | Usage                                           |
-| ------------------ | ------------ | --------------- | ----------------------------------------------- |
-| Flash              | `0x10000000` | 2 MiB           | Firmware code + embedded WASM binary            |
-| RAM (striped)      | `0x20000000` | 512 KiB         | Stack + heap + data                             |
-| Heap (allocated)   | —            | 256 KiB         | wasmi engine, store, module, WASM linear memory |
-| WASM linear memory | —            | 64 KiB (1 page) | WASM module's addressable memory                |
-| WASM stack         | —            | 4 KiB           | WASM call stack                                 |
+| Region             | Address      | Size            | Usage                                              |
+| ------------------ | ------------ | --------------- | -------------------------------------------------- |
+| Flash              | `0x10000000` | 2 MiB           | Firmware code + embedded WASM binary               |
+| RAM (striped)      | `0x20000000` | 512 KiB         | Stack + heap + data                                |
+| Heap (allocated)   | —            | 256 KiB         | wasmtime engine, store, module, WASM linear memory |
+| WASM linear memory | —            | 64 KiB (1 page) | WASM module's addressable memory                   |
+| WASM stack         | —            | 4 KiB           | WASM call stack                                    |
 
 > **Important:** The default WASM linker allocates 1 MB of linear memory (16 pages). This exceeds the RP2350's total RAM. The `wasm-app/.cargo/config.toml` explicitly sets `--initial-memory=65536` (1 page) and `stack-size=4096`.
 
@@ -309,13 +315,17 @@ Rebuild and reflash — only the 191-byte WASM binary changes.
 
 ## Troubleshooting
 
-| Symptom                                         | Cause                                  | Fix                                                               |
-| ----------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------- |
-| LED not blinking after flash                    | WASM linear memory too large for heap  | Ensure `wasm-app/.cargo/config.toml` has `--initial-memory=65536` |
-| Build fails with `unknown argument: --nmagic`   | Parent rustflags leaking to WASM build | Ensure `build.rs` has `.env_remove("CARGO_ENCODED_RUSTFLAGS")`    |
-| Build fails with `extern blocks must be unsafe` | Rust 2024 edition                      | Use `unsafe extern { ... }` with `safe fn` declarations           |
-| `picotool` can't find device                    | Not in bootloader mode                 | Hold BOOTSEL while plugging in USB                                |
-| `cargo build` doesn't pick up WASM changes      | Cached build artifacts                 | Run `cargo clean && cargo build --release`                        |
+| Symptom                                         | Cause                                  | Fix                                                                                    |
+| ----------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| LED not blinking after flash                    | WASM linear memory too large for heap  | Ensure `wasm-app/.cargo/config.toml` has `--initial-memory=65536`                      |
+| LED stays solid after flash                     | Panic handler blinking too fast to see | Use large `cortex_m::asm::delay` values (37.5M+ cycles at 150MHz)                      |
+| `Module::deserialize` panics                    | Config mismatch build vs device        | Both engines must have identical `Config` settings                                     |
+| `Module::deserialize` panics                    | `default-features` mismatch            | Both `[dependencies]` and `[build-dependencies]` need `default-features = false`       |
+| Build fails with `unknown argument: --nmagic`   | Parent rustflags leaking to WASM build | Ensure `build.rs` has `.env_remove("CARGO_ENCODED_RUSTFLAGS")`                         |
+| Build fails with `extern blocks must be unsafe` | Rust 2024 edition                      | Use `unsafe extern { ... }` with `safe fn` declarations                                |
+| `picotool` can't find device                    | Not in bootloader mode                 | Hold BOOTSEL while plugging in USB                                                     |
+| `cargo build` doesn't pick up WASM changes      | Cached build artifacts                 | Run `cargo clean && cargo build --release`                                             |
+| SIO register writes have no visible effect      | Using RP2040 offsets on RP2350         | RP2350 offsets differ: `GPIO_OUT_SET=0x018`, `GPIO_OUT_CLR=0x020`, `GPIO_OE_SET=0x038` |
 
 ## License
 

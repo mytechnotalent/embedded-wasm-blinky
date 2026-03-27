@@ -6,4 +6,9 @@ license = "MIT"
 publish = false
 
 [dependencies]
-wasmi = "1.0"
+wasmtime = { version = "43", default-features = false, features = [
+    "cranelift",
+    "runtime",
+    "pulley",
+    "all-arch",
+] }

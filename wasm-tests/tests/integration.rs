@@ -4,7 +4,7 @@
 //! expected `run` function, imports the correct host functions, and calls
 //! them in the proper blink sequence with the correct delay values.
 
-use wasmi::{Caller, Config, Engine, Linker, Module, Store};
+use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
 
 /// Compiled WASM blinky module embedded at build time.
 const WASM_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blinky.wasm"));
@@ -26,19 +26,23 @@ struct TestHostState {
     calls: Vec<HostCall>,
 }
 
-/// Creates a wasmi engine with fuel metering enabled.
+/// Creates a wasmtime engine with fuel metering enabled.
+///
+/// # Panics
+///
+/// Panics if engine creation fails.
 fn create_fuel_engine() -> Engine {
     let mut config = Config::default();
     config.consume_fuel(true);
-    Engine::new(&config)
+    Engine::new(&config).expect("create fuel engine")
 }
 
-/// Creates a default wasmi engine without fuel metering.
+/// Creates a default wasmtime engine without fuel metering.
 fn create_default_engine() -> Engine {
     Engine::default()
 }
 
-/// Compiles the embedded WASM binary into a wasmi module.
+/// Compiles the embedded WASM binary into a wasmtime module.
 ///
 /// # Panics
 ///
@@ -102,7 +106,7 @@ fn register_delay_ms(linker: &mut Linker<TestHostState>) {
 ///
 /// # Arguments
 ///
-/// * `engine` - The wasmi engine to associate the linker with.
+/// * `engine` - The wasmtime engine to associate the linker with.
 fn build_test_linker(engine: &Engine) -> Linker<TestHostState> {
     let mut linker = <Linker<TestHostState>>::new(engine);
     register_gpio_set_high(&mut linker);
@@ -115,7 +119,7 @@ fn build_test_linker(engine: &Engine) -> Linker<TestHostState> {
 ///
 /// # Arguments
 ///
-/// * `engine` - The wasmi engine to create the store for.
+/// * `engine` - The wasmtime engine to create the store for.
 /// * `fuel` - The amount of fuel to allocate for execution.
 fn create_fueled_store(engine: &Engine, fuel: u64) -> Store<TestHostState> {
     let mut store = Store::new(engine, TestHostState { calls: Vec::new() });
@@ -127,7 +131,7 @@ fn create_fueled_store(engine: &Engine, fuel: u64) -> Store<TestHostState> {
 ///
 /// # Arguments
 ///
-/// * `store` - The wasmi store with fuel and host state.
+/// * `store` - The wasmtime store with fuel and host state.
 /// * `linker` - The linker with host functions registered.
 /// * `module` - The compiled WASM module.
 fn run_until_out_of_fuel(
@@ -136,10 +140,10 @@ fn run_until_out_of_fuel(
     module: &Module,
 ) {
     let instance = linker
-        .instantiate_and_start(&mut *store, module)
+        .instantiate(&mut *store, module)
         .expect("instantiate");
     let run = instance
-        .get_typed_func::<(), ()>(&*store, "run")
+        .get_typed_func::<(), ()>(&mut *store, "run")
         .expect("find run");
     let _ = run.call(&mut *store, ());
 }
@@ -157,9 +161,9 @@ fn test_wasm_exports_run_function() {
     let linker = build_test_linker(&engine);
     let mut store = Store::new(&engine, TestHostState { calls: Vec::new() });
     let instance = linker
-        .instantiate_and_start(&mut store, &module)
+        .instantiate(&mut store, &module)
         .expect("instantiate");
-    let run = instance.get_typed_func::<(), ()>(&store, "run");
+    let run = instance.get_typed_func::<(), ()>(&mut store, "run");
     assert!(run.is_ok(), "module must export a `run` function");
 }
 
