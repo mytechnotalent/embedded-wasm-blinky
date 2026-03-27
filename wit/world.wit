@@ -1,0 +1,16 @@
+package embedded:platform;
+
+interface gpio {
+    set-high: func(pin: u32);
+    set-low: func(pin: u32);
+}
+
+interface timing {
+    delay-ms: func(ms: u32);
+}
+
+world blinky {
+    import gpio;
+    import timing;
+    export run: func();
+}

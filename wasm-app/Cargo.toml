@@ -7,6 +7,13 @@ license = "MIT"
 [lib]
 crate-type = ["cdylib"]
 
+[dependencies]
+wit-bindgen = { version = "0.54", default-features = false, features = [
+    "macros",
+    "realloc",
+] }
+dlmalloc = { version = "0.2", features = ["global"] }
+
 [profile.release]
 opt-level = "s"
 lto = true

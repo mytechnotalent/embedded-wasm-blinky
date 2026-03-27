@@ -11,4 +11,8 @@ wasmtime = { version = "43", default-features = false, features = [
     "runtime",
     "pulley",
     "all-arch",
+    "component-model",
 ] }
+
+[build-dependencies]
+wit-component = "0.245"

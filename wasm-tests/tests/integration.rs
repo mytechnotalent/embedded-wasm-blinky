@@ -2,25 +2,33 @@
 //!
 //! Copyright (c) 2026 Kevin Thomas
 //!
-//! # Integration Tests for WASM Blinky Module
+//! # Integration Tests for WASM Blinky Component
 //!
-//! Validates that the compiled WASM binary loads correctly, exports the
-//! expected `run` function, imports the correct host functions, and calls
-//! them in the proper blink sequence with the correct delay values.
+//! Validates that the compiled WASM component loads correctly through the
+//! Component Model, implements the expected WIT interfaces
+//! (`embedded:platform/gpio` and `embedded:platform/timing`), exports the
+//! `run` function, and calls host functions in the proper blink sequence
+//! with the correct delay values and pin targeting.
 
-use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
+use wasmtime::component::{Component, HasSelf};
+use wasmtime::{Config, Engine, Store};
 
-/// Compiled WASM blinky module embedded at build time.
+wasmtime::component::bindgen!({
+    world: "blinky",
+    path: "../wit",
+});
+
+/// Compiled WASM blinky component embedded at build time.
 const WASM_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blinky.wasm"));
 
 /// Represents a single host function call recorded during WASM execution.
 #[derive(Debug, PartialEq)]
 enum HostCall {
-    /// The `gpio_set_high` host function was called with the given pin.
+    /// The `gpio.set-high` WIT function was called with the given pin.
     GpioSetHigh(u32),
-    /// The `gpio_set_low` host function was called with the given pin.
+    /// The `gpio.set-low` WIT function was called with the given pin.
     GpioSetLow(u32),
-    /// The `delay_ms` host function was called with the given value.
+    /// The `timing.delay-ms` WIT function was called with the given value.
     DelayMs(u32),
 }
 
@@ -28,6 +36,22 @@ enum HostCall {
 struct TestHostState {
     /// Ordered log of every host function call.
     calls: Vec<HostCall>,
+}
+
+impl embedded::platform::gpio::Host for TestHostState {
+    fn set_high(&mut self, pin: u32) {
+        self.calls.push(HostCall::GpioSetHigh(pin));
+    }
+
+    fn set_low(&mut self, pin: u32) {
+        self.calls.push(HostCall::GpioSetLow(pin));
+    }
+}
+
+impl embedded::platform::timing::Host for TestHostState {
+    fn delay_ms(&mut self, ms: u32) {
+        self.calls.push(HostCall::DelayMs(ms));
+    }
 }
 
 /// Creates a wasmtime engine with fuel metering enabled.
@@ -46,82 +70,27 @@ fn create_default_engine() -> Engine {
     Engine::default()
 }
 
-/// Compiles the embedded WASM binary into a wasmtime module.
+/// Compiles the embedded WASM binary into a wasmtime component.
 ///
 /// # Panics
 ///
 /// Panics if the WASM binary is invalid.
-fn compile_module(engine: &Engine) -> Module {
-    Module::new(engine, WASM_BINARY).expect("valid WASM module")
+fn compile_component(engine: &Engine) -> Component {
+    Component::new(engine, WASM_BINARY).expect("valid WASM component")
 }
 
-/// Registers the `gpio_set_high` test host function on the linker.
-///
-/// # Panics
-///
-/// Panics if registration fails.
-fn register_gpio_set_high(linker: &mut Linker<TestHostState>) {
-    linker
-        .func_wrap(
-            "env",
-            "gpio_set_high",
-            |mut caller: Caller<'_, TestHostState>, pin: i32| {
-                caller
-                    .data_mut()
-                    .calls
-                    .push(HostCall::GpioSetHigh(pin as u32));
-            },
-        )
-        .expect("register gpio_set_high");
-}
-
-/// Registers the `gpio_set_low` test host function on the linker.
-///
-/// # Panics
-///
-/// Panics if registration fails.
-fn register_gpio_set_low(linker: &mut Linker<TestHostState>) {
-    linker
-        .func_wrap(
-            "env",
-            "gpio_set_low",
-            |mut caller: Caller<'_, TestHostState>, pin: i32| {
-                caller
-                    .data_mut()
-                    .calls
-                    .push(HostCall::GpioSetLow(pin as u32));
-            },
-        )
-        .expect("register gpio_set_low");
-}
-
-/// Registers the `delay_ms` test host function on the linker.
-///
-/// # Panics
-///
-/// Panics if registration fails.
-fn register_delay_ms(linker: &mut Linker<TestHostState>) {
-    linker
-        .func_wrap(
-            "env",
-            "delay_ms",
-            |mut caller: Caller<'_, TestHostState>, ms: i32| {
-                caller.data_mut().calls.push(HostCall::DelayMs(ms as u32));
-            },
-        )
-        .expect("register delay_ms");
-}
-
-/// Builds a fully configured test linker with all host functions registered.
+/// Builds a fully configured test linker with all WIT interfaces registered.
 ///
 /// # Arguments
 ///
 /// * `engine` - The wasmtime engine to associate the linker with.
-fn build_test_linker(engine: &Engine) -> Linker<TestHostState> {
-    let mut linker = <Linker<TestHostState>>::new(engine);
-    register_gpio_set_high(&mut linker);
-    register_gpio_set_low(&mut linker);
-    register_delay_ms(&mut linker);
+fn build_test_linker(engine: &Engine) -> wasmtime::component::Linker<TestHostState> {
+    let mut linker = wasmtime::component::Linker::new(engine);
+    Blinky::add_to_linker::<TestHostState, HasSelf<TestHostState>>(
+        &mut linker,
+        |state: &mut TestHostState| state,
+    )
+    .expect("register WIT interfaces");
     linker
 }
 
@@ -137,73 +106,90 @@ fn create_fueled_store(engine: &Engine, fuel: u64) -> Store<TestHostState> {
     store
 }
 
-/// Runs the WASM `run` function until fuel is exhausted, then returns the store.
+/// Runs the WASM `run` function until fuel is exhausted.
 ///
 /// # Arguments
 ///
 /// * `store` - The wasmtime store with fuel and host state.
-/// * `linker` - The linker with host functions registered.
-/// * `module` - The compiled WASM module.
+/// * `linker` - The component linker with WIT interfaces registered.
+/// * `component` - The compiled WASM component.
 fn run_until_out_of_fuel(
     store: &mut Store<TestHostState>,
-    linker: &Linker<TestHostState>,
-    module: &Module,
+    linker: &wasmtime::component::Linker<TestHostState>,
+    component: &Component,
 ) {
-    let instance = linker
-        .instantiate(&mut *store, module)
-        .expect("instantiate");
-    let run = instance
-        .get_typed_func::<(), ()>(&mut *store, "run")
-        .expect("find run");
-    let _ = run.call(&mut *store, ());
+    let blinky =
+        Blinky::instantiate(&mut *store, component, linker).expect("instantiate component");
+    let _ = blinky.call_run(&mut *store);
 }
 
 #[test]
-fn test_wasm_module_loads() {
+fn test_wasm_component_loads() {
     let engine = create_default_engine();
-    let _module = compile_module(&engine);
+    let _component = compile_component(&engine);
 }
 
 #[test]
 fn test_wasm_exports_run_function() {
     let engine = create_default_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = Store::new(&engine, TestHostState { calls: Vec::new() });
-    let instance = linker
-        .instantiate(&mut store, &module)
-        .expect("instantiate");
-    let run = instance.get_typed_func::<(), ()>(&mut store, "run");
-    assert!(run.is_ok(), "module must export a `run` function");
+    let blinky = Blinky::instantiate(&mut store, &component, &linker);
+    assert!(blinky.is_ok(), "component must instantiate with run export");
 }
 
 #[test]
 fn test_wasm_imports_match_expected() {
     let engine = create_default_engine();
-    let module = compile_module(&engine);
-    let imports: Vec<_> = module.imports().collect();
-    let names: Vec<_> = imports.iter().map(|i| i.name()).collect();
-    assert!(names.contains(&"gpio_set_high"), "missing gpio_set_high");
-    assert!(names.contains(&"gpio_set_low"), "missing gpio_set_low");
-    assert!(names.contains(&"delay_ms"), "missing delay_ms");
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    let import_names: Vec<_> = ty
+        .imports(&engine)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    assert!(
+        import_names.iter().any(|n| n.contains("gpio")),
+        "missing gpio interface"
+    );
+    assert!(
+        import_names.iter().any(|n| n.contains("timing")),
+        "missing timing interface"
+    );
 }
 
 #[test]
-fn test_all_imports_from_env_module() {
+fn test_all_imports_from_embedded_platform() {
     let engine = create_default_engine();
-    let module = compile_module(&engine);
-    for import in module.imports() {
-        assert_eq!(import.module(), "env", "all imports must be from env");
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    for (name, _) in ty.imports(&engine) {
+        assert!(
+            name.starts_with("embedded:platform/"),
+            "import '{name}' must be from embedded:platform"
+        );
     }
+}
+
+#[test]
+fn test_import_count_is_exactly_two() {
+    let engine = create_default_engine();
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    let count = ty.imports(&engine).count();
+    assert_eq!(
+        count, 2,
+        "component must have exactly 2 interface imports, got {count}"
+    );
 }
 
 #[test]
 fn test_blink_sequence_order() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 100_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     assert!(calls.len() >= 4, "need at least one full blink cycle");
     assert_eq!(calls[0], HostCall::GpioSetHigh(25));
@@ -215,10 +201,10 @@ fn test_blink_sequence_order() {
 #[test]
 fn test_blink_pattern_repeats() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 500_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     assert!(calls.len() >= 8, "need at least two full blink cycles");
     for chunk in calls.chunks_exact(4) {
@@ -232,10 +218,10 @@ fn test_blink_pattern_repeats() {
 #[test]
 fn test_delay_value_is_500ms() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 100_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     for call in calls {
         if let HostCall::DelayMs(ms) = call {
@@ -247,10 +233,10 @@ fn test_delay_value_is_500ms() {
 #[test]
 fn test_no_unexpected_host_calls() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 100_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     for call in calls {
         match call {
@@ -262,10 +248,10 @@ fn test_no_unexpected_host_calls() {
 #[test]
 fn test_fuel_metering_halts_infinite_loop() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 1_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let remaining = store.get_fuel().expect("get fuel");
     assert!(
         remaining < 10,
@@ -276,10 +262,10 @@ fn test_fuel_metering_halts_infinite_loop() {
 #[test]
 fn test_gpio_pin_is_always_25() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 500_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     for call in calls {
         match call {
@@ -292,20 +278,12 @@ fn test_gpio_pin_is_always_25() {
 }
 
 #[test]
-fn test_import_count_is_exactly_three() {
-    let engine = create_default_engine();
-    let module = compile_module(&engine);
-    let count = module.imports().count();
-    assert_eq!(count, 3, "module must have exactly 3 imports, got {count}");
-}
-
-#[test]
 fn test_equal_high_low_calls() {
     let engine = create_fuel_engine();
-    let module = compile_module(&engine);
+    let component = compile_component(&engine);
     let linker = build_test_linker(&engine);
     let mut store = create_fueled_store(&engine, 500_000);
-    run_until_out_of_fuel(&mut store, &linker, &module);
+    run_until_out_of_fuel(&mut store, &linker, &component);
     let calls = &store.data().calls;
     let highs = calls
         .iter()
@@ -319,10 +297,103 @@ fn test_equal_high_low_calls() {
 }
 
 #[test]
-fn test_wasm_binary_size_under_1kb() {
+fn test_wasm_component_size_under_16kb() {
     assert!(
-        WASM_BINARY.len() < 1024,
-        "WASM binary must be under 1 KB, got {} bytes",
+        WASM_BINARY.len() < 16_384,
+        "WASM component must be under 16 KB, got {} bytes",
         WASM_BINARY.len()
+    );
+}
+
+#[test]
+fn test_component_exports_exactly_one() {
+    let engine = create_default_engine();
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    let count = ty.exports(&engine).count();
+    assert_eq!(
+        count, 1,
+        "component must have exactly 1 export (run), got {count}"
+    );
+}
+
+#[test]
+fn test_gpio_import_name_is_correct() {
+    let engine = create_default_engine();
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    let import_names: Vec<_> = ty
+        .imports(&engine)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    assert!(
+        import_names.iter().any(|n| n == "embedded:platform/gpio"),
+        "missing embedded:platform/gpio import, got {import_names:?}"
+    );
+}
+
+#[test]
+fn test_timing_import_name_is_correct() {
+    let engine = create_default_engine();
+    let component = compile_component(&engine);
+    let ty = component.component_type();
+    let import_names: Vec<_> = ty
+        .imports(&engine)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    assert!(
+        import_names.iter().any(|n| n == "embedded:platform/timing"),
+        "missing embedded:platform/timing import, got {import_names:?}"
+    );
+}
+
+#[test]
+fn test_first_call_is_always_set_high() {
+    let engine = create_fuel_engine();
+    let component = compile_component(&engine);
+    let linker = build_test_linker(&engine);
+    let mut store = create_fueled_store(&engine, 100_000);
+    run_until_out_of_fuel(&mut store, &linker, &component);
+    let calls = &store.data().calls;
+    assert!(!calls.is_empty(), "must have at least one call");
+    assert_eq!(
+        calls[0],
+        HostCall::GpioSetHigh(25),
+        "first call must be set_high(25)"
+    );
+}
+
+#[test]
+fn test_delay_count_equals_gpio_count() {
+    let engine = create_fuel_engine();
+    let component = compile_component(&engine);
+    let linker = build_test_linker(&engine);
+    let mut store = create_fueled_store(&engine, 500_000);
+    run_until_out_of_fuel(&mut store, &linker, &component);
+    let calls = &store.data().calls;
+    let gpio_count = calls
+        .iter()
+        .filter(|c| matches!(c, HostCall::GpioSetHigh(_) | HostCall::GpioSetLow(_)))
+        .count();
+    let delay_count = calls
+        .iter()
+        .filter(|c| matches!(c, HostCall::DelayMs(_)))
+        .count();
+    assert_eq!(
+        gpio_count, delay_count,
+        "each GPIO call must be followed by a delay"
+    );
+}
+
+#[test]
+fn test_instantiate_with_missing_imports_fails() {
+    let engine = create_default_engine();
+    let component = compile_component(&engine);
+    let linker = wasmtime::component::Linker::<TestHostState>::new(&engine);
+    let mut store = Store::new(&engine, TestHostState { calls: Vec::new() });
+    let result = Blinky::instantiate(&mut store, &component, &linker);
+    assert!(
+        result.is_err(),
+        "instantiation must fail without WIT imports registered"
     );
 }

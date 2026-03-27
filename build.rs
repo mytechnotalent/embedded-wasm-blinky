@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use wasmtime::{Config, Engine};
+use wit_component::ComponentEncoder;
 
 /// Creates the output directory path and registers it for linker search.
 ///
@@ -85,7 +86,11 @@ fn create_pulley_engine() -> Engine {
     Engine::new(&config).expect("create Pulley engine")
 }
 
-/// AOT-compiles the WASM binary to Pulley bytecode and writes to the output directory.
+/// Encodes the core WASM module as a component and AOT-compiles to Pulley bytecode.
+///
+/// Reads the core WASM binary (which contains `wit-bindgen` component type
+/// metadata), wraps it as a WASM component via `ComponentEncoder`, then
+/// AOT-compiles the component to Pulley bytecode via Cranelift.
 ///
 /// # Arguments
 ///
@@ -93,14 +98,20 @@ fn create_pulley_engine() -> Engine {
 ///
 /// # Panics
 ///
-/// Panics if compilation or serialization fails.
+/// Panics if encoding, compilation, or serialization fails.
 fn compile_wasm_to_pulley(out: &Path) {
     let wasm_path = "wasm-app/target/wasm32-unknown-unknown/release/wasm_app.wasm";
     let wasm_bytes = std::fs::read(wasm_path).expect("read WASM binary");
+    let component_bytes = ComponentEncoder::default()
+        .module(&wasm_bytes)
+        .expect("set core module")
+        .validate(true)
+        .encode()
+        .expect("encode component");
     let engine = create_pulley_engine();
     let serialized = engine
-        .precompile_module(&wasm_bytes)
-        .expect("precompile WASM module");
+        .precompile_component(&component_bytes)
+        .expect("precompile component");
     std::fs::write(out.join("blinky.cwasm"), &serialized).expect("write Pulley bytecode");
 }
 
@@ -110,6 +121,7 @@ fn print_rerun_triggers() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=wasm-app/src/lib.rs");
     println!("cargo:rerun-if-changed=wasm-app/Cargo.toml");
+    println!("cargo:rerun-if-changed=wit/world.wit");
 }
 
 /// Build script entry point that sets up linker scripts and compiles the WASM app.

@@ -4,10 +4,11 @@
 //!
 //! # Build Script for wasm-tests Crate
 //!
-//! Compiles the WASM blinky application before tests run so the binary
-//! is available for integration tests via `include_bytes!`.
+//! Compiles the WASM blinky application, encodes it as a WASM component,
+//! and places it in `OUT_DIR` for integration tests via `include_bytes!`.
 
 use std::process::Command;
+use wit_component::ComponentEncoder;
 
 /// Compiles the WASM blinky application for the `wasm32-unknown-unknown` target.
 ///
@@ -24,28 +25,40 @@ fn compile_wasm_app() {
     assert!(status.success(), "WASM app compilation failed");
 }
 
-/// Copies the compiled WASM binary into the `OUT_DIR` for `include_bytes!`.
+/// Encodes the core WASM module as a component and writes to `OUT_DIR`.
+///
+/// Reads the core WASM binary (which contains `wit-bindgen` component type
+/// metadata), wraps it as a WASM component via `ComponentEncoder`, and
+/// writes the component binary for `include_bytes!`.
 ///
 /// # Panics
 ///
-/// Panics if the copy operation fails.
-fn copy_wasm_binary() {
+/// Panics if encoding fails.
+fn encode_component() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-    let src = "../wasm-app/target/wasm32-unknown-unknown/release/wasm_app.wasm";
-    let dst = format!("{out_dir}/blinky.wasm");
-    std::fs::copy(src, &dst).expect("failed to copy WASM binary");
+    let core_wasm =
+        std::fs::read("../wasm-app/target/wasm32-unknown-unknown/release/wasm_app.wasm")
+            .expect("read core WASM binary");
+    let component = ComponentEncoder::default()
+        .module(&core_wasm)
+        .expect("set core module")
+        .validate(true)
+        .encode()
+        .expect("encode component");
+    std::fs::write(format!("{out_dir}/blinky.wasm"), &component).expect("write component");
 }
 
 /// Registers file change triggers for incremental test rebuilds.
 fn print_rerun_triggers() {
     println!("cargo:rerun-if-changed=../wasm-app/src/lib.rs");
     println!("cargo:rerun-if-changed=../wasm-app/Cargo.toml");
+    println!("cargo:rerun-if-changed=../wit/world.wit");
     println!("cargo:rerun-if-changed=build.rs");
 }
 
 /// Build script entry point that compiles the WASM app for testing.
 fn main() {
     compile_wasm_app();
-    copy_wasm_binary();
+    encode_component();
     print_rerun_triggers();
 }
