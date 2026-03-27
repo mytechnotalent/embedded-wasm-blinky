@@ -16,10 +16,10 @@ const WASM_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blinky.wasm
 /// Represents a single host function call recorded during WASM execution.
 #[derive(Debug, PartialEq)]
 enum HostCall {
-    /// The `gpio_set_high` host function was called.
-    GpioSetHigh,
-    /// The `gpio_set_low` host function was called.
-    GpioSetLow,
+    /// The `gpio_set_high` host function was called with the given pin.
+    GpioSetHigh(u32),
+    /// The `gpio_set_low` host function was called with the given pin.
+    GpioSetLow(u32),
     /// The `delay_ms` host function was called with the given value.
     DelayMs(u32),
 }
@@ -65,8 +65,11 @@ fn register_gpio_set_high(linker: &mut Linker<TestHostState>) {
         .func_wrap(
             "env",
             "gpio_set_high",
-            |mut caller: Caller<'_, TestHostState>| {
-                caller.data_mut().calls.push(HostCall::GpioSetHigh);
+            |mut caller: Caller<'_, TestHostState>, pin: i32| {
+                caller
+                    .data_mut()
+                    .calls
+                    .push(HostCall::GpioSetHigh(pin as u32));
             },
         )
         .expect("register gpio_set_high");
@@ -82,8 +85,11 @@ fn register_gpio_set_low(linker: &mut Linker<TestHostState>) {
         .func_wrap(
             "env",
             "gpio_set_low",
-            |mut caller: Caller<'_, TestHostState>| {
-                caller.data_mut().calls.push(HostCall::GpioSetLow);
+            |mut caller: Caller<'_, TestHostState>, pin: i32| {
+                caller
+                    .data_mut()
+                    .calls
+                    .push(HostCall::GpioSetLow(pin as u32));
             },
         )
         .expect("register gpio_set_low");
@@ -200,9 +206,9 @@ fn test_blink_sequence_order() {
     run_until_out_of_fuel(&mut store, &linker, &module);
     let calls = &store.data().calls;
     assert!(calls.len() >= 4, "need at least one full blink cycle");
-    assert_eq!(calls[0], HostCall::GpioSetHigh);
+    assert_eq!(calls[0], HostCall::GpioSetHigh(25));
     assert_eq!(calls[1], HostCall::DelayMs(500));
-    assert_eq!(calls[2], HostCall::GpioSetLow);
+    assert_eq!(calls[2], HostCall::GpioSetLow(25));
     assert_eq!(calls[3], HostCall::DelayMs(500));
 }
 
@@ -216,9 +222,9 @@ fn test_blink_pattern_repeats() {
     let calls = &store.data().calls;
     assert!(calls.len() >= 8, "need at least two full blink cycles");
     for chunk in calls.chunks_exact(4) {
-        assert_eq!(chunk[0], HostCall::GpioSetHigh);
+        assert_eq!(chunk[0], HostCall::GpioSetHigh(25));
         assert_eq!(chunk[1], HostCall::DelayMs(500));
-        assert_eq!(chunk[2], HostCall::GpioSetLow);
+        assert_eq!(chunk[2], HostCall::GpioSetLow(25));
         assert_eq!(chunk[3], HostCall::DelayMs(500));
     }
 }
@@ -248,7 +254,7 @@ fn test_no_unexpected_host_calls() {
     let calls = &store.data().calls;
     for call in calls {
         match call {
-            HostCall::GpioSetHigh | HostCall::GpioSetLow | HostCall::DelayMs(_) => {}
+            HostCall::GpioSetHigh(_) | HostCall::GpioSetLow(_) | HostCall::DelayMs(_) => {}
         }
     }
 }
@@ -264,5 +270,59 @@ fn test_fuel_metering_halts_infinite_loop() {
     assert!(
         remaining < 10,
         "fuel must be nearly exhausted, got {remaining}"
+    );
+}
+
+#[test]
+fn test_gpio_pin_is_always_25() {
+    let engine = create_fuel_engine();
+    let module = compile_module(&engine);
+    let linker = build_test_linker(&engine);
+    let mut store = create_fueled_store(&engine, 500_000);
+    run_until_out_of_fuel(&mut store, &linker, &module);
+    let calls = &store.data().calls;
+    for call in calls {
+        match call {
+            HostCall::GpioSetHigh(pin) | HostCall::GpioSetLow(pin) => {
+                assert_eq!(*pin, 25, "GPIO pin must always be 25");
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn test_import_count_is_exactly_three() {
+    let engine = create_default_engine();
+    let module = compile_module(&engine);
+    let count = module.imports().count();
+    assert_eq!(count, 3, "module must have exactly 3 imports, got {count}");
+}
+
+#[test]
+fn test_equal_high_low_calls() {
+    let engine = create_fuel_engine();
+    let module = compile_module(&engine);
+    let linker = build_test_linker(&engine);
+    let mut store = create_fueled_store(&engine, 500_000);
+    run_until_out_of_fuel(&mut store, &linker, &module);
+    let calls = &store.data().calls;
+    let highs = calls
+        .iter()
+        .filter(|c| matches!(c, HostCall::GpioSetHigh(_)))
+        .count();
+    let lows = calls
+        .iter()
+        .filter(|c| matches!(c, HostCall::GpioSetLow(_)))
+        .count();
+    assert_eq!(highs, lows, "set_high and set_low must be called equally");
+}
+
+#[test]
+fn test_wasm_binary_size_under_1kb() {
+    assert!(
+        WASM_BINARY.len() < 1024,
+        "WASM binary must be under 1 KB, got {} bytes",
+        WASM_BINARY.len()
     );
 }

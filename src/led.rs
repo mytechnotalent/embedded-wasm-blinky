@@ -2,63 +2,78 @@
 //!
 //! Copyright (c) 2026 Kevin Thomas
 //!
-//! # GPIO25 LED Driver for RP2350 (Pico 2)
+//! # LED / GPIO Output Driver for RP2350 (Pico 2)
 //!
-//! Provides control of the onboard LED (GPIO25) via a critical-section
-//! mutex. Designed as a shared plug-and-play module identical across repos.
+//! Provides control of multiple GPIO output pins via a critical-section mutex.
+//! Pins are stored by their hardware GPIO number (e.g., 25 for the onboard LED)
+//! so WASM code can address them directly. Accepts any pin that implements
+//! `OutputPin`. Designed as a shared plug-and-play module identical across repos.
 
 #![allow(dead_code)]
 
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use core::cell::RefCell;
+use core::convert::Infallible;
 use critical_section::Mutex;
 use embedded_hal::digital::OutputPin;
-use rp235x_hal as hal;
 
-/// Type alias for the GPIO25 LED pin configured as push-pull output.
-pub type LedPin = hal::gpio::Pin<
-    hal::gpio::bank0::Gpio25,
-    hal::gpio::FunctionSio<hal::gpio::SioOutput>,
-    hal::gpio::PullDown,
->;
+/// Type alias for a boxed GPIO output pin trait object.
+type PinBox = Box<dyn OutputPin<Error = Infallible> + Send>;
 
-/// Global LED pin behind a critical-section mutex for safe shared access.
-static LED: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
-
-/// Stores the LED pin in a global mutex for shared access.
+/// Global pin storage behind a critical-section mutex for safe shared access.
 ///
-/// Must be called exactly once during firmware initialization.
+/// Pins are keyed by their hardware GPIO number.
+static PINS: Mutex<RefCell<BTreeMap<u8, PinBox>>> = Mutex::new(RefCell::new(BTreeMap::new()));
+
+/// Registers a GPIO pin for shared access, keyed by its hardware pin number.
+///
+/// May be called multiple times to register different pins.
 ///
 /// # Arguments
 ///
-/// * `pin` - GPIO25 pin configured as push-pull output.
-pub fn store_global(pin: LedPin) {
+/// * `gpio_num` - Hardware GPIO pin number (e.g., 25 for onboard LED).
+/// * `pin` - Any GPIO pin configured as push-pull output.
+pub fn store_pin(gpio_num: u8, pin: impl OutputPin<Error = Infallible> + Send + 'static) {
     critical_section::with(|cs| {
-        LED.borrow(cs).replace(Some(pin));
+        PINS.borrow(cs).borrow_mut().insert(gpio_num, Box::new(pin));
     });
 }
 
-/// Sets the LED high (on).
+/// Sets the specified GPIO pin high (on).
+///
+/// # Arguments
+///
+/// * `gpio_num` - Hardware GPIO pin number.
 ///
 /// # Panics
 ///
-/// Panics if called before `store_global`.
-pub fn set_high() {
+/// Panics if the pin has not been registered via `store_pin`.
+pub fn set_high(gpio_num: u8) {
     critical_section::with(|cs| {
-        let cell = LED.borrow(cs);
-        let mut pin = cell.borrow_mut();
-        let _ = pin.as_mut().unwrap().set_high();
+        let map = PINS.borrow(cs);
+        let mut map = map.borrow_mut();
+        let pin = map.get_mut(&gpio_num).expect("pin not registered");
+        let _ = pin.set_high();
     });
 }
 
-/// Sets the LED low (off).
+/// Sets the specified GPIO pin low (off).
+///
+/// # Arguments
+///
+/// * `gpio_num` - Hardware GPIO pin number.
 ///
 /// # Panics
 ///
-/// Panics if called before `store_global`.
-pub fn set_low() {
+/// Panics if the pin has not been registered via `store_pin`.
+pub fn set_low(gpio_num: u8) {
     critical_section::with(|cs| {
-        let cell = LED.borrow(cs);
-        let mut pin = cell.borrow_mut();
-        let _ = pin.as_mut().unwrap().set_low();
+        let map = PINS.borrow(cs);
+        let mut map = map.borrow_mut();
+        let pin = map.get_mut(&gpio_num).expect("pin not registered");
+        let _ = pin.set_low();
     });
 }

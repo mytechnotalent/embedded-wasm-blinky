@@ -35,16 +35,21 @@ static UART: Mutex<RefCell<Option<Uart0>>> = Mutex::new(RefCell::new(None));
 
 /// Creates and configures UART0 at 115200 baud with GPIO0 (TX) and GPIO1 (RX).
 ///
+/// Accepts only the two UART pins so callers retain ownership of all other
+/// GPIO pins. This keeps `uart.rs` plug-and-play across projects regardless
+/// of which extra pins each project uses.
+///
 /// # Arguments
 ///
 /// * `uart0` - UART0 peripheral from the PAC.
 /// * `resets` - Resets peripheral for UART reset control.
 /// * `clocks` - Clocks manager for peripheral clock frequency.
-/// * `pins` - GPIO pins (consumed for pin reconfiguration).
+/// * `tx_pin` - GPIO0 pin (will be reconfigured for UART TX).
+/// * `rx_pin` - GPIO1 pin (will be reconfigured for UART RX).
 ///
 /// # Returns
 ///
-/// A tuple of the configured UART0 peripheral and the GPIO25 LED pin.
+/// The configured UART0 peripheral.
 ///
 /// # Panics
 ///
@@ -53,22 +58,14 @@ pub fn init(
     uart0: hal::pac::UART0,
     resets: &mut hal::pac::RESETS,
     clocks: &hal::clocks::ClocksManager,
-    pins: hal::gpio::Pins,
-) -> (
-    Uart0,
-    hal::gpio::Pin<
-        hal::gpio::bank0::Gpio25,
-        hal::gpio::FunctionSio<hal::gpio::SioOutput>,
-        hal::gpio::PullDown,
-    >,
-) {
+    tx_pin: hal::gpio::Pin<hal::gpio::bank0::Gpio0, hal::gpio::FunctionNull, hal::gpio::PullDown>,
+    rx_pin: hal::gpio::Pin<hal::gpio::bank0::Gpio1, hal::gpio::FunctionNull, hal::gpio::PullDown>,
+) -> Uart0 {
     let uart_pins = (
-        pins.gpio0
-            .reconfigure::<hal::gpio::FunctionUart, hal::gpio::PullNone>(),
-        pins.gpio1
-            .reconfigure::<hal::gpio::FunctionUart, hal::gpio::PullNone>(),
+        tx_pin.reconfigure::<hal::gpio::FunctionUart, hal::gpio::PullNone>(),
+        rx_pin.reconfigure::<hal::gpio::FunctionUart, hal::gpio::PullNone>(),
     );
-    let uart = hal::uart::UartPeripheral::new(uart0, uart_pins, resets)
+    hal::uart::UartPeripheral::new(uart0, uart_pins, resets)
         .enable(
             hal::uart::UartConfig::new(
                 HertzU32::from_raw(115_200),
@@ -78,9 +75,7 @@ pub fn init(
             ),
             clocks.peripheral_clock.freq(),
         )
-        .expect("configure UART0");
-    let led_pin = pins.gpio25.into_push_pull_output();
-    (uart, led_pin)
+        .expect("configure UART0")
 }
 
 /// Stores the UART peripheral in a global mutex for shared access.

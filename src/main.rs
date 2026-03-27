@@ -49,8 +49,8 @@ pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 /// Uses boxed closures to abstract over concrete HAL types, keeping the WASM
 /// runtime decoupled from hardware-specific pin and timer types.
 struct HostState {
-    /// Closure to control the LED: `true` sets high, `false` sets low.
-    set_led: Box<dyn FnMut(bool)>,
+    /// Closure to set a GPIO pin high or low by pin number.
+    gpio_set: Box<dyn FnMut(u8, bool)>,
     /// Closure to delay execution for the given number of milliseconds.
     delay_ms: Box<dyn FnMut(u32)>,
 }
@@ -133,37 +133,82 @@ fn init_clocks(
     .unwrap()
 }
 
-/// Wraps hardware peripherals into boxed closures for the WASM host state.
+/// Writes a GPIO state change message to UART0 (e.g., "GPIO25 On\n").
 ///
-/// The LED closure writes "GPIO25 On\n" or "GPIO25 Off\n" to UART0
-/// each time the LED state changes. Delay is implemented via CPU cycle
-/// counting (`cortex_m::asm::delay`) at approximately 150 MHz.
+/// # Arguments
+///
+/// * `pin` - GPIO pin number.
+/// * `high` - `true` for On, `false` for Off.
+fn write_gpio_msg(pin: u8, high: bool) {
+    uart::write_msg(b"GPIO");
+    let mut buf = [0u8; 3];
+    let len = fmt_u8(pin, &mut buf);
+    uart::write_msg(&buf[..len]);
+    if high {
+        uart::write_msg(b" On\n");
+    } else {
+        uart::write_msg(b" Off\n");
+    }
+}
+
+/// Formats a `u8` as decimal digits into the provided buffer.
+///
+/// # Arguments
+///
+/// * `n` - The number to format.
+/// * `buf` - Output buffer (must be at least 3 bytes).
 ///
 /// # Returns
 ///
-/// A `HostState` containing the LED control and delay closures.
+/// The number of digits written to `buf`.
+fn fmt_u8(mut n: u8, buf: &mut [u8; 3]) -> usize {
+    if n == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut i = 0;
+    let mut tmp = [0u8; 3];
+    while n > 0 {
+        tmp[i] = b'0' + (n % 10);
+        n /= 10;
+        i += 1;
+    }
+    for j in 0..i {
+        buf[j] = tmp[i - 1 - j];
+    }
+    i
+}
+
+/// Wraps hardware peripherals into boxed closures for the WASM host state.
+///
+/// The GPIO closure controls any registered pin by number and logs
+/// state changes to UART0. Delay is implemented via CPU cycle counting
+/// (`cortex_m::asm::delay`) at approximately 150 MHz.
+///
+/// # Returns
+///
+/// A `HostState` containing the GPIO control and delay closures.
 fn build_host_state() -> HostState {
-    let set_led = Box::new(move |high: bool| {
+    let gpio_set = Box::new(move |pin: u8, high: bool| {
         if high {
-            led::set_high();
-            uart::write_msg(b"GPIO25 On\n");
+            led::set_high(pin);
         } else {
-            led::set_low();
-            uart::write_msg(b"GPIO25 Off\n");
+            led::set_low(pin);
         }
+        write_gpio_msg(pin, high);
     });
     let delay_ms = Box::new(move |ms: u32| {
         cortex_m::asm::delay(ms * 150_000);
     });
-    HostState { set_led, delay_ms }
+    HostState { gpio_set, delay_ms }
 }
 
 /// Initializes all RP2350 hardware and returns a configured host state.
 ///
-/// Sets up the watchdog, clocks, SIO, GPIO pins, UART0, and timer
-/// peripherals. GPIO25 is configured as a push-pull output for the
-/// onboard LED. UART0 is configured at 115200 baud on GPIO0 (TX) and
-/// GPIO1 (RX) for diagnostic output.
+/// Sets up the watchdog, clocks, SIO, and GPIO pins. Passes only GPIO0
+/// (TX) and GPIO1 (RX) to `uart::init()`, keeping all other pins under
+/// `main.rs` control. Configures GPIOs as push-pull outputs and registers
+/// them with the LED driver by pin number.
 ///
 /// # Returns
 ///
@@ -190,9 +235,9 @@ fn init_hardware() -> HostState {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
-    let (uart_dev, led_pin) = uart::init(pac.UART0, &mut pac.RESETS, &clocks, pins);
+    let uart_dev = uart::init(pac.UART0, &mut pac.RESETS, &clocks, pins.gpio0, pins.gpio1);
     uart::store_global(uart_dev);
-    led::store_global(led_pin);
+    led::store_pin(25, pins.gpio25.into_push_pull_output());
     build_host_state()
 }
 
@@ -243,7 +288,7 @@ fn create_module(engine: &Engine) -> Module {
     unsafe { Module::deserialize(engine, WASM_BINARY) }.expect("valid Pulley module")
 }
 
-/// Registers the `gpio_set_high` host function that turns the LED on.
+/// Registers the `gpio_set_high` host function that sets a GPIO pin high.
 ///
 /// # Arguments
 ///
@@ -257,14 +302,14 @@ fn register_gpio_set_high(linker: &mut Linker<HostState>) {
         .func_wrap(
             "env",
             "gpio_set_high",
-            |mut caller: Caller<'_, HostState>| {
-                (caller.data_mut().set_led)(true);
+            |mut caller: Caller<'_, HostState>, pin: i32| {
+                (caller.data_mut().gpio_set)(pin as u8, true);
             },
         )
         .expect("register gpio_set_high");
 }
 
-/// Registers the `gpio_set_low` host function that turns the LED off.
+/// Registers the `gpio_set_low` host function that sets a GPIO pin low.
 ///
 /// # Arguments
 ///
@@ -278,8 +323,8 @@ fn register_gpio_set_low(linker: &mut Linker<HostState>) {
         .func_wrap(
             "env",
             "gpio_set_low",
-            |mut caller: Caller<'_, HostState>| {
-                (caller.data_mut().set_led)(false);
+            |mut caller: Caller<'_, HostState>, pin: i32| {
+                (caller.data_mut().gpio_set)(pin as u8, false);
             },
         )
         .expect("register gpio_set_low");

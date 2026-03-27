@@ -36,33 +36,33 @@ This project demonstrates that WebAssembly is not just for browsers — it can r
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                 RP2350 (Pico 2)                 │
-│                                                 │
-│  ┌───────────────────────────────────────────┐  │
-│  │            Firmware (src/main.rs)         │  │
-│  │                                           │  │
-│  │  ┌─────────┐  ┌────────┐  ┌───────────┐   │  │
-│  │  │  Heap   │  │wasmtime│  │ Host Fns  │   │  │
-│  │  │ 256 KiB │  │ Pulley │  │ LED/Delay │   │  │
-│  │  └─────────┘  └───┬────┘  └─────┬─────┘   │  │
-│  │                   │             │         │  │
-│  │  ┌────────┐  ┌────┴─────────────┴──────┐  │  │
-│  │  │ led.rs │  │ Pulley Bytecode(.cwasm) │  │  │
-│  │  │uart.rs │  │                         │  │  │
-│  │  └────────┘  │  imports:               │  │  │
-│  │              │    env.gpio_set_high()  │  │  │
-│  │              │    env.gpio_set_low()   │  │  │
-│  │              │    env.delay_ms(u32)    │  │  │
-│  │              │                         │  │  │
-│  │              │  exports:               │  │  │
-│  │              │    run()                │  │  │
-│  │              └─────────────────────────┘  │  │
-│  └───────────────────────────────────────────┘  │
-│                                                 │
-│  GPIO25 (Onboard LED) ◄── led::set_high/set_low │
-│  GPIO0/1 (UART0) ◄── uart::write_msg (diag)     │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                 RP2350 (Pico 2)                     │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │            Firmware (src/main.rs)           │    │
+│  │                                             │    │
+│  │  ┌─────────┐  ┌────────┐  ┌───────────┐     │    │
+│  │  │  Heap   │  │wasmtime│  │ Host Fns  │     │    │
+│  │  │ 256 KiB │  │ Pulley │  │ LED/Delay │     │    │
+│  │  └─────────┘  └───┬────┘  └─────┬─────┘     │    │
+│  │                   │             │           │    │
+│  │  ┌────────┐  ┌────┴─────────────┴────────┐  │    │
+│  │  │ led.rs │  │ Pulley Bytecode(.cwasm)   │  │    │
+│  │  │uart.rs │  │                           │  │    │
+│  │  └────────┘  │  imports:                 │  │    │
+│  │              │    env.gpio_set_high(i32) │  │    │
+│  │              │    env.gpio_set_low(i32)  │  │    │
+│  │              │    env.delay_ms(i32)      │  │    │
+│  │              │                           │  │    │
+│  │              │  exports:                 │  │    │
+│  │              │    run()                  │  │    │
+│  │              └───────────────────────────┘  │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  GPIO25 (Onboard LED) -> led::set_high/set_low(pin) │
+│  GPIO0/1 (UART0) -> uart::write_msg (diag)          │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -70,50 +70,50 @@ This project demonstrates that WebAssembly is not just for browsers — it can r
 ```
 embedded-wasm-blinky/
 ├── .cargo/
-│   └── config.toml           # ARM Cortex-M33 target, linker flags, picotool runner
+│   └── config.toml        # ARM Cortex-M33 target, linker flags, picotool runner
 ├── .vscode/
-│   ├── extensions.json       # Recommended VS Code extensions
-│   └── settings.json         # Rust-analyzer target configuration
-├── wasm-app/                 # WASM blinky module (compiled to .wasm)
+│   ├── extensions.json    # Recommended VS Code extensions
+│   └── settings.json      # Rust-analyzer target configuration
+├── wasm-app/              # WASM blinky module (compiled to .wasm)
 │   ├── .cargo/
-│   │   └── config.toml       # WASM linker flags (minimal memory)
+│   │   └── config.toml    # WASM linker flags (minimal memory)
 │   ├── Cargo.toml
 │   └── src/
-│       └── lib.rs            # Blinky logic: imports host GPIO/delay, exports run()
-├── wasm-tests/               # Integration tests for the WASM module
+│       └── lib.rs         # Blinky logic: imports host GPIO/delay, exports run()
+├── wasm-tests/            # Integration tests for the WASM module
 │   ├── Cargo.toml
-│   ├── build.rs              # Compiles WASM app before tests
+│   ├── build.rs           # Compiles WASM app before tests
 │   └── tests/
-│       └── integration.rs    # Tests: loading, imports, blink sequence, timing, fuel
+│       └── integration.rs # Tests: loading, imports, blink, pin, size, fuel
 ├── src/
-│   ├── main.rs               # Firmware: hardware init, wasmtime runtime, host functions
-│   ├── led.rs                # GPIO25 LED driver (shared plug-and-play module)
-│   ├── uart.rs               # UART0 driver (shared plug-and-play module)
-│   └── platform.rs           # Platform TLS glue for wasmtime no_std
-├── build.rs                  # Compiles WASM app, AOT-compiles to Pulley bytecode
-├── Cargo.toml                # Firmware dependencies
-├── rp2350.x                  # RP2350 memory layout linker script
-├── SKILLS.md                 # Project conventions and lessons learned
-└── README.md                 # This file
+│   ├── main.rs            # Firmware: hardware init, wasmtime runtime, host functions
+│   ├── led.rs             # GPIO output driver — multi-pin, keyed by pin number
+│   ├── uart.rs            # UART0 driver (shared plug-and-play module)
+│   └── platform.rs        # Platform TLS glue for wasmtime no_std
+├── build.rs               # Compiles WASM app, AOT-compiles to Pulley bytecode
+├── Cargo.toml             # Firmware dependencies
+├── rp2350.x               # RP2350 memory layout linker script
+├── SKILLS.md              # Project conventions and lessons learned
+└── README.md              # This file
 ```
 
 ## Source Files
 
 ### `wasm-app/src/lib.rs` — WASM Guest Module
 
-The WASM module compiled to `wasm32-unknown-unknown`. Declares host imports (`gpio_set_high`, `gpio_set_low`, `delay_ms`) and exports a `run()` function that blinks the LED in an infinite loop at 500ms intervals. Helper functions (`set_led_high`, `set_led_low`, `delay`) wrap the raw extern calls.
+The WASM module compiled to `wasm32-unknown-unknown`. Declares host imports (`gpio_set_high(pin)`, `gpio_set_low(pin)`, `delay_ms`) and exports a `run()` function that blinks the LED in an infinite loop at 500ms intervals. GPIO pins are addressed by their hardware number (e.g., 25 for the onboard LED).
 
 ### `src/main.rs` — Firmware Entry Point
 
 Orchestrates everything: initializes the heap (256 KiB), clocks, and hardware peripherals, then boots the wasmtime Pulley engine. Registers host functions that bridge WASM imports to the `led` and `uart` driver modules, deserializes the embedded `.cwasm` bytecode, and calls the WASM `run()` export. The panic handler uses `uart::panic_init()` and `uart::panic_write()` to output diagnostics over UART0 via raw register writes.
 
-### `src/led.rs` — GPIO25 LED Driver (Shared Module)
+### `src/led.rs` — GPIO Output Driver (Shared Module)
 
-Controls the onboard LED via a `critical_section::Mutex`. `init()` (in `uart.rs`) configures GPIO25 as push-pull output and returns the pin. `led::store_global()` stores it in a mutex. `led::set_high()` and `led::set_low()` toggle the LED. Marked `#![allow(dead_code)]` because this is a shared plug-and-play module — not every repo uses every function.
+Controls any number of GPIO output pins via a `critical_section::Mutex<RefCell<BTreeMap>>`. Pins are stored by their hardware GPIO number so WASM code can address them directly (e.g., `gpio_set_high(25)`). `led::store_pin(25, pin)` registers a pin, `led::set_high(25)` / `led::set_low(25)` toggles it. Accepts any type implementing `embedded_hal::digital::OutputPin` — no dependency on `rp235x-hal`. Marked `#![allow(dead_code)]` — shared plug-and-play module.
 
 ### `src/uart.rs` — UART0 Driver (Shared Module)
 
-Provides both HAL-based and raw-register UART0 access. `uart::init()` configures UART0 at 115200 baud on GPIO0 (TX) / GPIO1 (RX) and returns the peripheral plus the GPIO25 pin. `uart::store_global()` stores the UART in a `critical_section::Mutex`. HAL functions: `write_msg()`, `read_byte()`, `write_byte()`. Panic functions (raw registers, no HAL): `panic_init()`, `panic_write()`. Marked `#![allow(dead_code)]` — shared module, identical across repos.
+Provides both HAL-based and raw-register UART0 access. `uart::init()` accepts only the GPIO0 (TX) and GPIO1 (RX) pins and configures UART0 at 115200 baud, returning just the UART peripheral. Callers retain ownership of all other pins. `uart::store_global()` stores the UART in a `critical_section::Mutex`. HAL functions: `write_msg()`, `read_byte()`, `write_byte()`. Panic functions (raw registers, no HAL): `panic_init()`, `panic_write()`. Marked `#![allow(dead_code)]` — shared module, identical across repos.
 
 ### `src/platform.rs` — wasmtime TLS Glue
 
@@ -132,8 +132,8 @@ Copies the linker script (`rp2350.x` → `memory.x`), spawns a child `cargo buil
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Required compilation targets
-rustup target add thumbv8m.main-none-eabihf   # RP2350 ARM Cortex-M33
-rustup target add wasm32-unknown-unknown      # WebAssembly
+rustup target add thumbv8m.main-none-eabihf # RP2350 ARM Cortex-M33
+rustup target add wasm32-unknown-unknown    # WebAssembly
 ```
 
 ### Flashing Tool
@@ -193,7 +193,7 @@ After flashing, the LED on GPIO25 will begin blinking at 500ms intervals. If a U
 cd wasm-tests && cargo test
 ```
 
-Runs all 9 integration tests validating module loading, import/export contracts, blink sequencing, timing, and fuel-based execution limits.
+Runs all 13 integration tests validating module loading, import/export contracts, blink sequencing, timing, pin targeting, binary size, and fuel-based execution limits.
 
 ## How It Works
 
@@ -203,18 +203,20 @@ The WASM module is a `#![no_std]` Rust library compiled to `wasm32-unknown-unkno
 
 ```rust
 unsafe extern "C" {
-    safe fn gpio_set_high();
-    safe fn gpio_set_low();
+    safe fn gpio_set_high(pin: u32);
+    safe fn gpio_set_low(pin: u32);
     safe fn delay_ms(ms: u32);
 }
+
+const LED_PIN: u32 = 25;
 
 #[unsafe(no_mangle)]
 pub fn run() {
     loop {
-        set_led_high();    // → calls gpio_set_high()
-        delay(500);        // → calls delay_ms(500)
-        set_led_low();     // → calls gpio_set_low()
-        delay(500);        // → calls delay_ms(500)
+        set_pin_high(LED_PIN); // → calls gpio_set_high(25)
+        delay(500); // → calls delay_ms(500)
+        set_pin_low(LED_PIN); // → calls gpio_set_low(25)
+        delay(500); // → calls delay_ms(500)
     }
 }
 ```
@@ -233,33 +235,34 @@ The firmware boots in this sequence:
 
 1. **`init_heap()`** — 256 KiB heap for wasmtime via `embedded-alloc`.
 2. **`init_hardware()`** — Clocks, SIO, GPIO, UART0, LED:
-   - `uart::init()` → configures UART0 at 115200 baud, returns UART + LED pin
+   - `uart::init(gpio0, gpio1)` → configures UART0 at 115200 baud (takes only TX/RX pins)
    - `uart::store_global()` → stores UART in mutex
-   - `led::store_global()` → stores LED pin in mutex
-   - `build_host_state()` → wraps `led::set_high/low` + `uart::write_msg` + `cortex_m::asm::delay` into boxed closures
+   - `led::store_pin(25, ...)` → registers GPIO25 as LED output
+   - `led::store_pin(16, ...)` → registers GPIO16 as additional output
+   - `build_host_state()` → wraps `led::set_high/low(pin)` + `uart::write_msg` + `cortex_m::asm::delay` into boxed closures
 3. **`run_wasm(host_state)`** — Boots the WASM runtime:
    ```
-   create_engine()    → Config::target("pulley32"), bare-metal settings
-   create_module()    → Module::deserialize(embedded .cwasm bytes)
-   Store::new()       → Holds HostState with LED/delay closures
-   build_linker()     → Registers env.gpio_set_high, env.gpio_set_low, env.delay_ms
-   execute_wasm()     → linker.instantiate() → instance.get("run") → run.call()
+   create_engine() → Config::target("pulley32"), bare-metal settings
+   create_module() → Module::deserialize(embedded .cwasm bytes)
+   Store::new()    → Holds HostState with LED/delay closures
+   build_linker()  → Registers env.gpio_set_high, env.gpio_set_low, env.delay_ms
+   execute_wasm()  → linker.instantiate() → instance.get("run") → run.call()
    ```
 
 ### 3. The Call Chain
 
 ```
 WASM run()
-  → gpio_set_high()           [WASM import]
-    → linker callback          [wasmtime dispatch]
-      → (host_state.set_led)(true)  [boxed closure]
-        → led::set_high()     [led.rs — HAL pin.set_high()]
-        → uart::write_msg("GPIO25 On\n")  [uart.rs — serial output]
-  → delay_ms(500)             [WASM import]
+  → gpio_set_high(25)                      [WASM import]
+    → linker callback                      [wasmtime dispatch]
+      → (host_state.gpio_set)(25, true)    [boxed closure]
+        → led::set_high(25)                [led.rs — HAL pin.set_high()]
+        → uart::write_msg("GPIO25 On\n")   [uart.rs — serial output]
+  → delay_ms(500)                          [WASM import]
     → linker callback
       → (host_state.delay_ms)(500)
-        → cortex_m::asm::delay(75_000_000)  [CPU cycle spin]
-  → gpio_set_low()            [WASM import]
+        → cortex_m::asm::delay(75_000_000) [CPU cycle spin]
+  → gpio_set_low(25)                       [WASM import]
     → ... same pattern ...
 ```
 
@@ -290,7 +293,7 @@ Critical detail: `CARGO_ENCODED_RUSTFLAGS` (ARM flags like `--nmagic`, `-Tlink.x
 
 1. Copy the repo and rename it.
 2. Drop in `uart.rs` and `platform.rs` unchanged — they are plug-and-play.
-3. Drop in `led.rs` if your project uses GPIO25.
+3. Drop in `led.rs` if your project uses GPIO outputs (any pin, not hardcoded).
 4. Edit `wasm-app/src/lib.rs`:
    - Add your host imports as `safe fn` inside the existing `unsafe extern "C"` block
      (the `unsafe extern` wrapper is a Rust 2024 language requirement, not optional)
@@ -298,17 +301,18 @@ Critical detail: `CARGO_ENCODED_RUSTFLAGS` (ARM flags like `--nmagic`, `-Tlink.x
 5. Edit `src/main.rs`:
    - Define `HostState` with closures matching your WASM imports
    - Register each import with `linker.func_wrap("env", "name", ...)`
-   - Call `uart::init()`, `uart::store_global()`, etc. in `init_hardware()`
+   - Pass only UART pins to `uart::init(gpio0, gpio1)` in `init_hardware()`
+   - Register GPIO pins with `led::store_pin(N, pin.into_push_pull_output())`
 6. `build.rs` and `Cargo.toml` need no changes unless you rename the `.cwasm` output.
 7. `cargo build --release` → `cargo run --release` to flash.
 
 ## Host Function Interface
 
-| Import Name         | Signature    | Description                                                  |
-| ------------------- | ------------ | ------------------------------------------------------------ |
-| `env.gpio_set_high` | `() → ()`    | Sets GPIO25 high (on) and logs "GPIO25 On" to UART0          |
-| `env.gpio_set_low`  | `() → ()`    | Sets GPIO25 low (off) and logs "GPIO25 Off" to UART0         |
-| `env.delay_ms`      | `(i32) → ()` | Blocks execution for N milliseconds (via CPU cycle counting) |
+| Import Name         | Signature    | Description                                                     |
+| ------------------- | ------------ | --------------------------------------------------------------- |
+| `env.gpio_set_high` | `(i32) → ()` | Sets the specified GPIO pin high and logs "GPIO{N} On" to UART0 |
+| `env.gpio_set_low`  | `(i32) → ()` | Sets the specified GPIO pin low and logs "GPIO{N} Off" to UART0 |
+| `env.delay_ms`      | `(i32) → ()` | Blocks execution for N milliseconds (via CPU cycle counting)    |
 
 ## Memory Layout
 
@@ -350,10 +354,10 @@ Edit the delay values in `wasm-app/src/lib.rs`:
 ```rust
 pub fn run() {
     loop {
-        set_led_high();
-        delay(100);     // 100ms on
-        set_led_low();
-        delay(900);     // 900ms off
+        set_pin_high(LED_PIN);
+        delay(100); // 100ms on
+        set_pin_low(LED_PIN);
+        delay(900); // 900ms off
     }
 }
 ```
