@@ -39,22 +39,41 @@ struct TestHostState {
 }
 
 impl embedded::platform::gpio::Host for TestHostState {
+    /// Records a `set-high` call with the given pin number.
+    ///
+    /// # Arguments
+    ///
+    /// * `pin` - GPIO pin number passed by the WASM guest.
     fn set_high(&mut self, pin: u32) {
         self.calls.push(HostCall::GpioSetHigh(pin));
     }
 
+    /// Records a `set-low` call with the given pin number.
+    ///
+    /// # Arguments
+    ///
+    /// * `pin` - GPIO pin number passed by the WASM guest.
     fn set_low(&mut self, pin: u32) {
         self.calls.push(HostCall::GpioSetLow(pin));
     }
 }
 
 impl embedded::platform::timing::Host for TestHostState {
+    /// Records a `delay-ms` call with the given duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `ms` - Delay duration in milliseconds passed by the WASM guest.
     fn delay_ms(&mut self, ms: u32) {
         self.calls.push(HostCall::DelayMs(ms));
     }
 }
 
 /// Creates a wasmtime engine with fuel metering enabled.
+///
+/// # Returns
+///
+/// A wasmtime `Engine` with fuel consumption enabled.
 ///
 /// # Panics
 ///
@@ -66,11 +85,23 @@ fn create_fuel_engine() -> Engine {
 }
 
 /// Creates a default wasmtime engine without fuel metering.
+///
+/// # Returns
+///
+/// A wasmtime `Engine` with default configuration.
 fn create_default_engine() -> Engine {
     Engine::default()
 }
 
 /// Compiles the embedded WASM binary into a wasmtime component.
+///
+/// # Arguments
+///
+/// * `engine` - The wasmtime engine to compile with.
+///
+/// # Returns
+///
+/// The compiled WASM `Component`.
 ///
 /// # Panics
 ///
@@ -84,6 +115,14 @@ fn compile_component(engine: &Engine) -> Component {
 /// # Arguments
 ///
 /// * `engine` - The wasmtime engine to associate the linker with.
+///
+/// # Returns
+///
+/// A component `Linker` with `gpio::Host` and `timing::Host` registered.
+///
+/// # Panics
+///
+/// Panics if WIT interface registration fails.
 fn build_test_linker(engine: &Engine) -> wasmtime::component::Linker<TestHostState> {
     let mut linker = wasmtime::component::Linker::new(engine);
     Blinky::add_to_linker::<TestHostState, HasSelf<TestHostState>>(
@@ -100,6 +139,14 @@ fn build_test_linker(engine: &Engine) -> wasmtime::component::Linker<TestHostSta
 ///
 /// * `engine` - The wasmtime engine to create the store for.
 /// * `fuel` - The amount of fuel to allocate for execution.
+///
+/// # Returns
+///
+/// A `Store` containing an empty `TestHostState` with the fuel budget set.
+///
+/// # Panics
+///
+/// Panics if fuel allocation fails.
 fn create_fueled_store(engine: &Engine, fuel: u64) -> Store<TestHostState> {
     let mut store = Store::new(engine, TestHostState { calls: Vec::new() });
     store.set_fuel(fuel).expect("set fuel");
@@ -113,6 +160,10 @@ fn create_fueled_store(engine: &Engine, fuel: u64) -> Store<TestHostState> {
 /// * `store` - The wasmtime store with fuel and host state.
 /// * `linker` - The component linker with WIT interfaces registered.
 /// * `component` - The compiled WASM component.
+///
+/// # Panics
+///
+/// Panics if component instantiation fails.
 fn run_until_out_of_fuel(
     store: &mut Store<TestHostState>,
     linker: &wasmtime::component::Linker<TestHostState>,
@@ -123,12 +174,22 @@ fn run_until_out_of_fuel(
     let _ = blinky.call_run(&mut *store);
 }
 
+/// Verifies that the WASM component binary loads without error.
+///
+/// # Panics
+///
+/// Panics if the WASM component binary fails to compile.
 #[test]
 fn test_wasm_component_loads() {
     let engine = create_default_engine();
     let _component = compile_component(&engine);
 }
 
+/// Verifies that the component instantiates and exports the `run` function.
+///
+/// # Panics
+///
+/// Panics if the component fails to instantiate.
 #[test]
 fn test_wasm_exports_run_function() {
     let engine = create_default_engine();
@@ -139,6 +200,11 @@ fn test_wasm_exports_run_function() {
     assert!(blinky.is_ok(), "component must instantiate with run export");
 }
 
+/// Verifies that the component imports both `gpio` and `timing` interfaces.
+///
+/// # Panics
+///
+/// Panics if a required interface import is missing.
 #[test]
 fn test_wasm_imports_match_expected() {
     let engine = create_default_engine();
@@ -158,6 +224,11 @@ fn test_wasm_imports_match_expected() {
     );
 }
 
+/// Verifies that all imports originate from the `embedded:platform` package.
+///
+/// # Panics
+///
+/// Panics if any import is not from the `embedded:platform` package.
 #[test]
 fn test_all_imports_from_embedded_platform() {
     let engine = create_default_engine();
@@ -171,6 +242,11 @@ fn test_all_imports_from_embedded_platform() {
     }
 }
 
+/// Verifies that the component has exactly 2 interface imports.
+///
+/// # Panics
+///
+/// Panics if the import count is not exactly 2.
 #[test]
 fn test_import_count_is_exactly_two() {
     let engine = create_default_engine();
@@ -183,6 +259,11 @@ fn test_import_count_is_exactly_two() {
     );
 }
 
+/// Verifies the first blink cycle follows the high-delay-low-delay pattern.
+///
+/// # Panics
+///
+/// Panics if the blink cycle does not match the expected sequence.
 #[test]
 fn test_blink_sequence_order() {
     let engine = create_fuel_engine();
@@ -198,6 +279,11 @@ fn test_blink_sequence_order() {
     assert_eq!(calls[3], HostCall::DelayMs(500));
 }
 
+/// Verifies that the blink pattern repeats consistently across cycles.
+///
+/// # Panics
+///
+/// Panics if any blink cycle deviates from the expected pattern.
 #[test]
 fn test_blink_pattern_repeats() {
     let engine = create_fuel_engine();
@@ -215,6 +301,11 @@ fn test_blink_pattern_repeats() {
     }
 }
 
+/// Verifies that all delay calls use the expected 500ms value.
+///
+/// # Panics
+///
+/// Panics if any delay call does not use 500ms.
 #[test]
 fn test_delay_value_is_500ms() {
     let engine = create_fuel_engine();
@@ -230,6 +321,11 @@ fn test_delay_value_is_500ms() {
     }
 }
 
+/// Verifies that no unknown host call variants are recorded.
+///
+/// # Panics
+///
+/// Panics if an unrecognized host call variant is encountered.
 #[test]
 fn test_no_unexpected_host_calls() {
     let engine = create_fuel_engine();
@@ -245,6 +341,11 @@ fn test_no_unexpected_host_calls() {
     }
 }
 
+/// Verifies that fuel metering halts the infinite blink loop.
+///
+/// # Panics
+///
+/// Panics if fuel retrieval fails or fuel is not nearly exhausted.
 #[test]
 fn test_fuel_metering_halts_infinite_loop() {
     let engine = create_fuel_engine();
@@ -259,6 +360,11 @@ fn test_fuel_metering_halts_infinite_loop() {
     );
 }
 
+/// Verifies that all GPIO calls target pin 25 exclusively.
+///
+/// # Panics
+///
+/// Panics if any GPIO call targets a pin other than 25.
 #[test]
 fn test_gpio_pin_is_always_25() {
     let engine = create_fuel_engine();
@@ -277,6 +383,11 @@ fn test_gpio_pin_is_always_25() {
     }
 }
 
+/// Verifies that `set_high` and `set_low` are called an equal number of times.
+///
+/// # Panics
+///
+/// Panics if the high and low call counts are not equal.
 #[test]
 fn test_equal_high_low_calls() {
     let engine = create_fuel_engine();
@@ -296,6 +407,11 @@ fn test_equal_high_low_calls() {
     assert_eq!(highs, lows, "set_high and set_low must be called equally");
 }
 
+/// Verifies that the WASM component binary is under 16 KB.
+///
+/// # Panics
+///
+/// Panics if the component binary is 16 KB or larger.
 #[test]
 fn test_wasm_component_size_under_16kb() {
     assert!(
@@ -305,6 +421,11 @@ fn test_wasm_component_size_under_16kb() {
     );
 }
 
+/// Verifies that the component has exactly 1 export (`run`).
+///
+/// # Panics
+///
+/// Panics if the export count is not exactly 1.
 #[test]
 fn test_component_exports_exactly_one() {
     let engine = create_default_engine();
@@ -317,6 +438,11 @@ fn test_component_exports_exactly_one() {
     );
 }
 
+/// Verifies that the `embedded:platform/gpio` import is present.
+///
+/// # Panics
+///
+/// Panics if the `embedded:platform/gpio` import is missing.
 #[test]
 fn test_gpio_import_name_is_correct() {
     let engine = create_default_engine();
@@ -332,6 +458,11 @@ fn test_gpio_import_name_is_correct() {
     );
 }
 
+/// Verifies that the `embedded:platform/timing` import is present.
+///
+/// # Panics
+///
+/// Panics if the `embedded:platform/timing` import is missing.
 #[test]
 fn test_timing_import_name_is_correct() {
     let engine = create_default_engine();
@@ -347,6 +478,11 @@ fn test_timing_import_name_is_correct() {
     );
 }
 
+/// Verifies that the first host call is always `set_high(25)`.
+///
+/// # Panics
+///
+/// Panics if the first call is not `set_high(25)`.
 #[test]
 fn test_first_call_is_always_set_high() {
     let engine = create_fuel_engine();
@@ -363,6 +499,11 @@ fn test_first_call_is_always_set_high() {
     );
 }
 
+/// Verifies that every GPIO call is paired with a corresponding delay call.
+///
+/// # Panics
+///
+/// Panics if GPIO and delay call counts are not equal.
 #[test]
 fn test_delay_count_equals_gpio_count() {
     let engine = create_fuel_engine();
@@ -385,6 +526,11 @@ fn test_delay_count_equals_gpio_count() {
     );
 }
 
+/// Verifies that instantiation fails when WIT imports are not registered.
+///
+/// # Panics
+///
+/// Panics if instantiation succeeds without WIT imports.
 #[test]
 fn test_instantiate_with_missing_imports_fails() {
     let engine = create_default_engine();

@@ -36,35 +36,35 @@ This project demonstrates that WebAssembly is not just for browsers — it can r
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                 RP2350 (Pico 2)                     │
-│                                                     │
-│  ┌─────────────────────────────────────────────┐    │
-│  │            Firmware (src/main.rs)           │    │
-│  │                                             │    │
-│  │  ┌─────────┐  ┌────────┐  ┌───────────┐     │    │
-│  │  │  Heap   │  │wasmtime│  │ WIT Host  │     │    │
-│  │  │ 256 KiB │  │ Pulley │  │ Trait Impl│     │    │
-│  │  └─────────┘  └───┬────┘  └─────┬─────┘     │    │
-│  │                   │             │           │    │
-│  │  ┌────────┐  ┌────┴─────────────┴────────┐  │    │
-│  │  │ led.rs │  │ Pulley Bytecode (.cwasm)  │  │    │
-│  │  │uart.rs │  │                           │  │    │
-│  │  └────────┘  │  imports:                 │  │    │
-│  │              │    embedded:platform/gpio  │  │    │
-│  │              │      set-high(pin: u32)   │  │    │
-│  │              │      set-low(pin: u32)    │  │    │
-│  │              │    embedded:platform/timing│  │    │
-│  │              │      delay-ms(ms: u32)    │  │    │
-│  │              │                           │  │    │
-│  │              │  exports:                 │  │    │
-│  │              │    run()                  │  │    │
-│  │              └───────────────────────────┘  │    │
-│  └─────────────────────────────────────────────┘    │
-│                                                     │
-│  GPIO25 (Onboard LED) -> led::set_high/set_low(pin) │
-│  GPIO0/1 (UART0) -> uart::write_msg (diag)          │
-└─────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│                 RP2350 (Pico 2)                       │
+│                                                       │
+│  ┌───────────────────────────────────────────────┐    │
+│  │            Firmware (src/main.rs)             │    │
+│  │                                               │    │
+│  │  ┌─────────┐  ┌────────┐  ┌───────────┐       │    │
+│  │  │  Heap   │  │wasmtime│  │ WIT Host  │       │    │
+│  │  │ 256 KiB │  │ Pulley │  │ Trait Impl│       │    │
+│  │  └─────────┘  └───┬────┘  └─────┬─────┘       │    │
+│  │                   │             │             │    │
+│  │  ┌────────┐  ┌────┴─────────────┴──────────┐  │    │
+│  │  │ led.rs │  │ Pulley Bytecode (.cwasm)    │  │    │
+│  │  │uart.rs │  │                             │  │    │
+│  │  └────────┘  │  imports:                   │  │    │
+│  │              │    embedded:platform/gpio   │  │    │
+│  │              │      set-high(pin: u32)     │  │    │
+│  │              │      set-low(pin: u32)      │  │    │
+│  │              │    embedded:platform/timing │  │    │
+│  │              │      delay-ms(ms: u32)      │  │    │
+│  │              │                             │  │    │
+│  │              │  exports:                   │  │    │
+│  │              │    run()                    │  │    │
+│  │              └─────────────────────────────┘  │    │
+│  └───────────────────────────────────────────────┘    │
+│                                                       │
+│  GPIO25 (Onboard LED) -> led::set_high/set_low(pin)   │
+│  GPIO0/1 (UART0) -> uart::write_msg (diag)            │
+└───────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -278,16 +278,16 @@ The firmware boots in this sequence:
 
 ```
 WASM run()
-  → gpio::set_high(25)                    [WIT interface call]
+  → gpio::set_high(25)                     [WIT interface call]
     → component model dispatch             [wasmtime canonical ABI]
       → HostState::set_high(pin: 25)       [gpio::Host trait impl]
         → led::set_high(25)                [led.rs — HAL pin.set_high()]
         → uart::write_msg("GPIO25 On\n")   [uart.rs — serial output]
-  → timing::delay_ms(500)                 [WIT interface call]
+  → timing::delay_ms(500)                  [WIT interface call]
     → component model dispatch
       → HostState::delay_ms(ms: 500)       [timing::Host trait impl]
         → cortex_m::asm::delay(75_000_000) [CPU cycle spin]
-  → gpio::set_low(25)                     [WIT interface call]
+  → gpio::set_low(25)                      [WIT interface call]
     → ... same pattern ...
 ```
 

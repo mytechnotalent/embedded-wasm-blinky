@@ -57,11 +57,21 @@ pub static IMAGE_DEF: hal::block::ImageDef = hal::block::ImageDef::secure_exe();
 struct HostState;
 
 impl embedded::platform::gpio::Host for HostState {
+    /// Sets the specified GPIO pin high and logs the state change to UART0.
+    ///
+    /// # Arguments
+    ///
+    /// * `pin` - Hardware GPIO pin number.
     fn set_high(&mut self, pin: u32) {
         led::set_high(pin as u8);
         write_gpio_msg(pin as u8, true);
     }
 
+    /// Sets the specified GPIO pin low and logs the state change to UART0.
+    ///
+    /// # Arguments
+    ///
+    /// * `pin` - Hardware GPIO pin number.
     fn set_low(&mut self, pin: u32) {
         led::set_low(pin as u8);
         write_gpio_msg(pin as u8, false);
@@ -69,6 +79,11 @@ impl embedded::platform::gpio::Host for HostState {
 }
 
 impl embedded::platform::timing::Host for HostState {
+    /// Blocks execution for the specified duration via CPU cycle counting.
+    ///
+    /// # Arguments
+    ///
+    /// * `ms` - Delay duration in milliseconds.
     fn delay_ms(&mut self, ms: u32) {
         cortex_m::asm::delay(ms * 150_000);
     }
@@ -109,6 +124,7 @@ fn panic(info: &PanicInfo) -> ! {
 /// Uses `unsafe` to initialize the allocator with a raw pointer to static memory.
 fn init_heap() {
     use core::mem::MaybeUninit;
+    /// Static memory region backing the global heap allocator.
     static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
     unsafe { HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE) }
 }
@@ -270,6 +286,10 @@ fn create_engine() -> Engine {
 /// # Arguments
 ///
 /// * `engine` - Engine with matching Pulley configuration.
+///
+/// # Returns
+///
+/// The deserialized wasmtime `Component`.
 ///
 /// # Panics
 ///

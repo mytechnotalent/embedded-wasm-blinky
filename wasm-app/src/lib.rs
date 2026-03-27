@@ -15,6 +15,7 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+/// Global heap allocator required by the canonical ABI's `cabi_realloc`.
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
@@ -25,12 +26,15 @@ wit_bindgen::generate!({
     path: "../wit",
 });
 
+/// WASM guest component implementing the `blinky` world.
 struct BlinkyApp;
 
 export!(BlinkyApp);
 
 impl Guest for BlinkyApp {
+    /// Blinks the onboard LED at 500ms intervals in an infinite loop.
     fn run() {
+        /// Hardware GPIO pin number for the onboard LED.
         const LED_PIN: u32 = 25;
         loop {
             gpio::set_high(LED_PIN);
@@ -42,6 +46,10 @@ impl Guest for BlinkyApp {
 }
 
 /// Panic handler for the WASM environment that halts in an infinite loop.
+///
+/// # Arguments
+///
+/// * `_info` - Panic information (unused in the WASM environment).
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {

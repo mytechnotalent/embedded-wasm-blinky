@@ -168,15 +168,25 @@ pub fn write_byte(byte: u8) {
 /// Uses `unsafe` to write directly to hardware registers. Safe to call
 /// from the panic handler on this single-threaded platform.
 pub fn panic_init() {
+    /// RESETS peripheral base address.
     const RESETS_BASE: u32 = 0x4002_0000;
+    /// Pointer to the RESETS atomic-clear register for deasserting resets.
     const RESET_CLR: *mut u32 = (RESETS_BASE + 0x3000) as *mut u32;
+    /// Pointer to the RESET_DONE register for checking reset completion.
     const RESET_DONE: *const u32 = (RESETS_BASE + 0x0008) as *const u32;
+    /// IO_BANK0 peripheral base address for GPIO control.
     const IO_BANK0_BASE: u32 = 0x4002_8000;
+    /// Pointer to the GPIO0 function select control register.
     const GPIO0_CTRL: *mut u32 = (IO_BANK0_BASE + 0x004) as *mut u32;
+    /// Pointer to the GPIO1 function select control register.
     const GPIO1_CTRL: *mut u32 = (IO_BANK0_BASE + 0x00C) as *mut u32;
+    /// Pointer to the UART integer baud rate divisor register.
     const UARTIBRD: *mut u32 = (UART0_BASE + 0x024) as *mut u32;
+    /// Pointer to the UART fractional baud rate divisor register.
     const UARTFBRD: *mut u32 = (UART0_BASE + 0x028) as *mut u32;
+    /// Pointer to the UART line control register (data bits, FIFO enable).
     const UARTLCR_H: *mut u32 = (UART0_BASE + 0x02C) as *mut u32;
+    /// Pointer to the UART control register (enable, TX/RX).
     const UARTCR: *mut u32 = (UART0_BASE + 0x030) as *mut u32;
     unsafe {
         core::ptr::write_volatile(RESET_CLR, (1 << 26) | (1 << 6));
@@ -204,7 +214,9 @@ pub fn panic_init() {
 ///
 /// Uses `unsafe` to read and write directly to UART0 hardware registers.
 pub fn panic_write_byte(byte: u8) {
+    /// Pointer to the UART data register for transmitting bytes.
     const UARTDR: *mut u32 = UART0_BASE as *mut u32;
+    /// Pointer to the UART flag register for checking TX FIFO status.
     const UARTFR: *const u32 = (UART0_BASE + 0x018) as *const u32;
     unsafe {
         while core::ptr::read_volatile(UARTFR) & (1 << 5) != 0 {}
